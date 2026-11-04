@@ -30,3 +30,7 @@ keywords = [
 preferred_target = "wasm"
 
 description = "Gradient boosted decision trees in pure MoonBit: load XGBoost models and predict on native, wasm and js."
+
+import {
+  "moonbitlang/x@0.5.7",
+}

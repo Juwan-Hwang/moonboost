@@ -4,6 +4,7 @@ package "Juwan-Hwang/moonboost/cmd/main"
 // Values
 
 // Errors
+type CliError
 
 // Types and methods
 

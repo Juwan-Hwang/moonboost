@@ -22,6 +22,11 @@ jobs:
       - run: moon update
       - run: moon check --target ${{ matrix.target }} --deny-warn
       - run: moon test --target ${{ matrix.target }}
+      - name: Node example against the JS build
+        if: matrix.target == 'js'
+        run: |
+          moon build --target js --release
+          node examples/node/iris.mjs
 
   lint:
     runs-on: ubuntu-latest

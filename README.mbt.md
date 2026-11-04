@@ -87,9 +87,9 @@ better. XGBoost is timed through its C API (`XGBoosterPredictFromDense`,
 
 | Model | moonboost native | moonboost JS (Node 22) | XGBoost 3.4.1 C API |
 |---|---|---|---|
-| 100 trees, depth 4 | 0.67 | 7.1 | 1.05 |
-| 500 trees, depth 8 | 4.73 | 53.4 | 12.97 |
-| 1000 trees, depth 10 | 12.07 | 129.6 | 34.63 |
+| 100 trees, depth 4 | 0.60 | 6.7 | 1.05 |
+| 500 trees, depth 8 | 4.47 | 36.7 | 12.97 |
+| 1000 trees, depth 10 | 11.4 | 86.5 | 34.63 |
 
 All 30,000 predictions are bit-for-bit identical to XGBoost's. Reproduce with
 `python3 bench/gen_models.py`, then `moonboost bench`, `node

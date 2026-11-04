@@ -72,10 +72,17 @@ pub fn Model::predict_margin(
   row : ArrayView[Float],
 ) -> Array[Float] {
   if self.fast is Some(fast) {
-    let ranks = FixedArray::make(2 * fast.num_feature, 0)
+    let ranks = Buf::new(2 * fast.num_feature)
     fast.ranks(row, ranks, 0)
     let margin = FixedArray::make(self.num_group, self.base_margin)
-    fast.accumulate(self.tree_group, self.num_group, ranks, 1, [0], margin)
+    fast.accumulate(
+      self.tree_group,
+      self.num_group,
+      ranks,
+      1,
+      Buf::new(1),
+      margin,
+    )
     return Array::makei(self.num_group, g => margin[g])
   }
   let out = Array::make(self.num_group, self.base_margin)

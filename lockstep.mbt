@@ -172,7 +172,7 @@ fn lower_bound(
 fn Lockstep::ranks(
   self : Lockstep,
   row : ArrayView[Float],
-  out : FixedArray[Int32],
+  out : Buf,
   at : Int32,
 ) -> Unit {
   for f in 0..<self.num_feature {
@@ -182,8 +182,8 @@ fn Lockstep::ranks(
       Float::from_double(0.0) / 0.0
     }
     if x.is_nan() {
-      out[at + 2 * f] = 0
-      out[at + 2 * f + 1] = RANK_HIGH
+      out.set(at + 2 * f, 0)
+      out.set(at + 2 * f + 1, RANK_HIGH)
     } else {
       // number of thresholds <= x
       let key = float_key(x)
@@ -197,8 +197,8 @@ fn Lockstep::ranks(
         step = step / 2
       }
       let r = b - lo
-      out[at + 2 * f] = r
-      out[at + 2 * f + 1] = r
+      out.set(at + 2 * f, r)
+      out.set(at + 2 * f + 1, r)
     }
   }
 }
@@ -210,31 +210,34 @@ fn Lockstep::accumulate(
   self : Lockstep,
   tree_group : Array[Int32],
   groups : Int32,
-  ranks : FixedArray[Int32],
+  ranks : Buf,
   n : Int32,
-  idx : FixedArray[Int32],
+  idx : Buf,
   margin : FixedArray[Float],
 ) -> Unit {
   let width = 2 * self.num_feature
   let nodes = self.nodes
   for t in 0..<self.roots.length() {
     let root = self.roots[t]
-    for r in 0..<n {
-      idx[r] = root
-    }
+    idx.fill(root)
     for _ in 0..<self.depth[t] {
       for r in 0..<n {
         // In bounds by construction: `build` stores only node ids of this
         // forest and slots below `width`, and `ranks` holds `n` rows, so
         // `step` reads without bounds checks.
-        let i = idx.unsafe_get(r)
-        idx.unsafe_set(r, nodes.step(i, ranks, r * width))
+        let i = idx.get(r)
+        idx.set(r, nodes.step(i, ranks, r * width))
       }
     }
     let g = tree_group[t]
+    let leaf_value = self.leaf_value
     for r in 0..<n {
+      // in bounds: `margin` holds `n * groups` values and `idx` holds nodes
       let k = r * groups + g
-      margin[k] = margin[k] + self.leaf_value[idx[r]]
+      margin.unsafe_set(
+        k,
+        margin.unsafe_get(k) + leaf_value.unsafe_get(idx.get(r)),
+      )
     }
   }
 }

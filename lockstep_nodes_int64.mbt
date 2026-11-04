@@ -16,18 +16,9 @@ fn Nodes::set(self : Nodes, id : Int32, left : Int32, word : Int32) -> Unit {
 ///|
 /// Next node after `i`, reading the row's rank slots at `ranks[base:]`.
 /// Callers guarantee every index is in bounds.
-fn Nodes::step(
-  self : Nodes,
-  i : Int32,
-  ranks : FixedArray[Int32],
-  base : Int32,
-) -> Int32 {
+fn Nodes::step(self : Nodes, i : Int32, ranks : Buf, base : Int32) -> Int32 {
   let node = self.0.unsafe_get(i)
   let w = node.to_int()
-  let go = if ranks.unsafe_get(base + (w >> 16)) >= (w & 0xFFFF) {
-    1
-  } else {
-    0
-  }
+  let go = if ranks.get(base + (w >> 16)) >= (w & 0xFFFF) { 1 } else { 0 }
   (node >> 32).to_int() + go
 }

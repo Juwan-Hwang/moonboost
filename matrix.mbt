@@ -100,10 +100,10 @@ pub fn Model::predict_batch(self : Model, m : DenseMatrix) -> Array[Float] {
   let margin = FixedArray::make(BLOCK * groups, (0.0 : Float))
   let row_out : Array[Float] = Array(capacity=groups)
   let ranks = match self.fast {
-    Some(fast) => FixedArray::make(BLOCK * 2 * fast.num_feature, 0)
-    None => []
+    Some(fast) => Buf::new(BLOCK * 2 * fast.num_feature)
+    None => Buf::new(0)
   }
-  let idx = FixedArray::make(BLOCK, 0)
+  let idx = Buf::new(BLOCK)
   for start = 0; start < m.rows; start = start + BLOCK {
     let n = if m.rows - start < BLOCK { m.rows - start } else { BLOCK }
     margin.fill(self.base_margin)

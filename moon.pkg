@@ -14,5 +14,7 @@ options(
   targets: {
     "lockstep_nodes_int64.mbt": [ "not", "js" ],
     "lockstep_nodes_js.mbt": [ "js" ],
+    "lockstep_buf.mbt": [ "not", "js" ],
+    "lockstep_buf_js.mbt": [ "js" ],
   },
 )

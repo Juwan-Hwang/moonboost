@@ -1,0 +1,18 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Juwan-Hwang/moonboost/kernel"
+
+// Values
+pub const MISSING : Int32 = -2147483648
+
+// Errors
+
+// Types and methods
+type Forest
+pub fn Forest::leaf(Self, Int32, FixedArray[Int32]) -> Int32
+pub fn Forest::new(FixedArray[Int32], FixedArray[Int32], FixedArray[Int32], FixedArray[Int32]) -> Self?
+pub fn Forest::num_nodes(Self) -> Int32
+pub fn Forest::num_trees(Self) -> Int32
+
+// Type aliases
+
+// Traits

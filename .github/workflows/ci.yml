@@ -39,6 +39,20 @@ jobs:
           moon info
           git diff --exit-code -- '*.mbti'
 
+  prove:
+    # Machine-checked proofs for the tree-walking kernel (see kernel/).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - run: moon update
+      - name: Install Why3 and Z3
+        run: sudo apt-get update && sudo apt-get install -y why3 z3
+      - run: moon prove
+
   fixtures:
     # The differential-test fixtures must be reproducible from the reference
     # XGBoost release they claim to come from.

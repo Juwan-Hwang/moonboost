@@ -1,0 +1,82 @@
+///|
+/// Node `i` occupies `nodes[4*i .. 4*i+4]`: left child, right child, packed
+/// split metadata (`feature * 4 + 2 * is_categorical + default_left`) and the
+/// threshold key (numerical split) or categorical range index.
+fn n_nodes(f : Forest) -> Int {
+  f.n
+}
+
+///|
+fn left_of(f : Forest, i : Int) -> Int {
+  f.nodes[4 * i]
+}
+
+///|
+fn right_of(f : Forest, i : Int) -> Int {
+  f.nodes[4 * i + 1]
+}
+
+///|
+fn info_of(f : Forest, i : Int) -> Int {
+  f.nodes[4 * i + 2]
+}
+
+///|
+fn arg_of(f : Forest, i : Int) -> Int {
+  f.nodes[4 * i + 3]
+}
+
+///|
+/// A categorical node's range `cat_ranges[2k], cat_ranges[2k+1]` is a valid
+/// slice of `cats`.
+predicate range_ok(f : Forest, k : Int) {
+  0 <= k &&
+  2 * k + 1 < f.cat_ranges.length() &&
+  0 <= f.cat_ranges[2 * k] &&
+  f.cat_ranges[2 * k] <= f.cat_ranges[2 * k + 1] &&
+  f.cat_ranges[2 * k + 1] <= f.cats.length()
+}
+
+///|
+/// A numerical split needs nothing more; a categorical one needs a valid
+/// range. (Kept as its own predicate: an inline `a && (b || c)` is currently
+/// lowered to Why3 without the parentheses.)
+predicate split_ok(f : Forest, i : Int) {
+  info_of(f, i) % 4 < 2 || range_ok(f, arg_of(f, i))
+}
+
+///|
+/// Split nodes point strictly forward, which is what makes traversal
+/// terminate, and every index they carry is in bounds.
+predicate node_ok(f : Forest, i : Int) {
+  left_of(f, i) == -1 ||
+  (i < left_of(f, i) &&
+  left_of(f, i) < n_nodes(f) &&
+  i < right_of(f, i) &&
+  right_of(f, i) < n_nodes(f) &&
+  0 <= info_of(f, i) &&
+  split_ok(f, i))
+}
+
+///|
+predicate root_ok(f : Forest, t : Int) {
+  0 <= f.roots[t] && f.roots[t] < n_nodes(f)
+}
+
+///|
+predicate forest_inv(f : Forest) {
+  0 <= f.n &&
+  f.nodes.length() == 4 * f.n &&
+  (∀ i : Int, 0 <= i && i < n_nodes(f) → node_ok(f, i)) &&
+  (∀ t : Int, 0 <= t && t < f.roots.length() → root_ok(f, t))
+}
+
+///|
+predicate is_leaf(f : Forest, i : Int) {
+  0 <= i && i < n_nodes(f) && left_of(f, i) == -1
+}
+
+///|
+fn remaining(f : Forest, i : Int) -> Int {
+  n_nodes(f) - i
+}

@@ -1,6 +1,8 @@
 import {
   "moonbitlang/core/math",
   "moonbitlang/core/debug",
+  "moonbitlang/core/json",
+  "moonbitlang/core/string",
 }
 
 import {

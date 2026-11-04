@@ -27,6 +27,7 @@ pub struct Model {
   objective : Objective
   feature_names : Array[String]
 }
+pub fn Model::from_xgboost_json(StringView) -> Self raise ModelError
 pub fn Model::new(trees~ : Array[Tree], tree_group~ : Array[Int32], num_group~ : Int32, num_feature~ : Int32, base_score~ : Float, objective~ : Objective, feature_names? : Array[String]) -> Self raise ModelError
 pub fn Model::num_trees(Self) -> Int32
 pub fn Model::predict(Self, ArrayView[Float]) -> Array[Float]

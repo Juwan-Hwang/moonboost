@@ -76,4 +76,14 @@ jobs:
         run: |
           python3 tools/gen_fixtures.py
           moon fmt
-      - run: git diff --stat --exit-code xgboost_fixtures_test.mbt
+      - name: Compare with the committed fixtures
+        run: git diff --stat --exit-code xgboost_fixtures_test.mbt
+      # XGBoost's training is not bit-identical across CPU architectures (the
+      # log-link objectives differ between x86-64 and aarch64), so the
+      # committed fixtures are the ones generated here, on x86-64. On a
+      # mismatch, the regenerated file is kept for download.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixtures-x86_64
+          path: xgboost_fixtures_test.mbt

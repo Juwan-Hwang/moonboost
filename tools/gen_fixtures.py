@@ -6,6 +6,11 @@ predictions. `moon test` then checks moonboost against these numbers.
 
 Usage: python3 tools/gen_fixtures.py && moon fmt
        (needs xgboost, scikit-learn, numpy, pandas)
+
+XGBoost training is not bit-identical across CPU architectures, so the
+committed file is the one this script produces on x86-64 (the CI `fixtures`
+job, which uploads it as an artifact when it differs). Predictions are
+compared bit for bit whatever machine runs the tests.
 """
 import json
 import numpy as np

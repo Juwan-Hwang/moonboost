@@ -79,7 +79,7 @@ jobs:
       - name: Compare with the committed fixtures
         run: git diff --stat --exit-code xgboost_fixtures_test.mbt
       # XGBoost's training is not bit-identical across CPU architectures (the
-      # log-link objectives differ between x86-64 and aarch64), so the
+      # reg:tweedie model differs between x86-64 and aarch64), so the
       # committed fixtures are the ones generated here, on x86-64. On a
       # mismatch, the regenerated file is kept for download.
       - if: failure()

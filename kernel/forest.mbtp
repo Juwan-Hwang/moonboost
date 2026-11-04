@@ -40,7 +40,8 @@ predicate range_ok(f : Forest, k : Int) {
 ///|
 /// A numerical split needs nothing more; a categorical one needs a valid
 /// range. (Kept as its own predicate: an inline `a && (b || c)` is currently
-/// lowered to Why3 without the parentheses.)
+/// lowered to Why3 without the parentheses, see
+/// https://github.com/moonbitlang/moonbit-docs/issues/1347.)
 predicate split_ok(f : Forest, i : Int) {
   info_of(f, i) % 4 < 2 || range_ok(f, arg_of(f, i))
 }

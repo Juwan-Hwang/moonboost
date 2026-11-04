@@ -99,17 +99,29 @@ pub fn Model::predict_batch(self : Model, m : DenseMatrix) -> Array[Float] {
   let keys = FixedArray::makei(BLOCK, _ => FixedArray::make(m.cols, 0))
   let margin = FixedArray::make(BLOCK * groups, (0.0 : Float))
   let row_out : Array[Float] = Array(capacity=groups)
+  let ranks = match self.fast {
+    Some(fast) => FixedArray::make(BLOCK * 2 * fast.num_feature, 0)
+    None => []
+  }
+  let idx = FixedArray::make(BLOCK, 0)
   for start = 0; start < m.rows; start = start + BLOCK {
     let n = if m.rows - start < BLOCK { m.rows - start } else { BLOCK }
-    for r in 0..<n {
-      c.encode(m.row(start + r), keys[r])
-    }
     margin.fill(self.base_margin)
-    for t in 0..<self.tree_group.length() {
-      let g = self.tree_group[t]
+    if self.fast is Some(fast) {
       for r in 0..<n {
-        let k = r * groups + g
-        margin[k] = margin[k] + c.leaf_value[c.leaf(t, keys[r])]
+        fast.ranks(m.row(start + r), ranks, r * 2 * fast.num_feature)
+      }
+      fast.accumulate(self.tree_group, groups, ranks, n, idx, margin)
+    } else {
+      for r in 0..<n {
+        c.encode(m.row(start + r), keys[r])
+      }
+      for t in 0..<self.tree_group.length() {
+        let g = self.tree_group[t]
+        for r in 0..<n {
+          let k = r * groups + g
+          margin[k] = margin[k] + c.leaf_value[c.leaf(t, keys[r])]
+        }
       }
     }
     for r in 0..<n {

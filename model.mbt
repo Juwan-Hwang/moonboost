@@ -12,6 +12,7 @@ pub struct Model {
   objective : Objective
   feature_names : Array[String]
   priv compiled : Compiled
+  priv fast : Lockstep?
 }
 
 ///|
@@ -53,6 +54,7 @@ pub fn Model::new(
     objective,
     feature_names,
     compiled: compile(trees, num_feature),
+    fast: Lockstep::build(trees, num_feature),
   }
 }
 
@@ -69,6 +71,13 @@ pub fn Model::predict_margin(
   self : Model,
   row : ArrayView[Float],
 ) -> Array[Float] {
+  if self.fast is Some(fast) {
+    let ranks = FixedArray::make(2 * fast.num_feature, 0)
+    fast.ranks(row, ranks, 0)
+    let margin = FixedArray::make(self.num_group, self.base_margin)
+    fast.accumulate(self.tree_group, self.num_group, ranks, 1, [0], margin)
+    return Array::makei(self.num_group, g => margin[g])
+  }
   let out = Array::make(self.num_group, self.base_margin)
   let c = self.compiled
   let keys = c.keys(row)

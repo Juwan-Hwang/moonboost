@@ -103,7 +103,7 @@ pub fn Model::predict_batch(self : Model, m : DenseMatrix) -> Array[Float] {
     Some(fast) => Buf::new(BLOCK * 2 * fast.num_feature)
     None => Buf::new(0)
   }
-  let idx = Buf::new(BLOCK)
+  let idx = Buf::new(2 * BLOCK)
   for start = 0; start < m.rows; start = start + BLOCK {
     let n = if m.rows - start < BLOCK { m.rows - start } else { BLOCK }
     margin.fill(self.base_margin)

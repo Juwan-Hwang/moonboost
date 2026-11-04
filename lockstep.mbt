@@ -217,27 +217,69 @@ fn Lockstep::accumulate(
 ) -> Unit {
   let width = 2 * self.num_feature
   let nodes = self.nodes
-  for t in 0..<self.roots.length() {
+  let leaf_value = self.leaf_value
+  let trees = self.roots.length()
+  for t = 0; t < trees; {
     let root = self.roots[t]
-    idx.fill(root)
-    for _ in 0..<self.depth[t] {
+    let d = self.depth[t]
+    let g = tree_group[t]
+    if t + 1 < trees && d >= 2 && self.depth[t + 1] >= 2 {
+      // Two trees walk side by side through the same rows: one loop, one
+      // row offset and twice the independent loads per iteration. The
+      // shallower tree's rows wait in their self-looping leaves.
+      let root2 = self.roots[t + 1]
+      let d2 = self.depth[t + 1]
+      let g2 = tree_group[t + 1]
+      let d = if d2 > d { d2 } else { d }
       for r in 0..<n {
-        // In bounds by construction: `build` stores only node ids of this
-        // forest and slots below `width`, and `ranks` holds `n` rows, so
-        // `step` reads without bounds checks.
-        let i = idx.get(r)
-        idx.set(r, nodes.step(i, ranks, r * width))
+        let base = r * width
+        idx.set(r, nodes.step(root, ranks, base))
+        idx.set(n + r, nodes.step(root2, ranks, base))
+      }
+      for _ in 2..<d {
+        for r in 0..<n {
+          // in bounds by construction, as below
+          let base = r * width
+          idx.set(r, nodes.step(idx.get(r), ranks, base))
+          idx.set(n + r, nodes.step(idx.get(n + r), ranks, base))
+        }
+      }
+      for r in 0..<n {
+        // leaves add in tree order: tree `t` first, then `t + 1`
+        let base = r * width
+        let l1 = nodes.step(idx.get(r), ranks, base)
+        let l2 = nodes.step(idx.get(n + r), ranks, base)
+        let k = r * groups + g
+        margin.unsafe_set(k, margin.unsafe_get(k) + leaf_value.unsafe_get(l1))
+        let k = r * groups + g2
+        margin.unsafe_set(k, margin.unsafe_get(k) + leaf_value.unsafe_get(l2))
+      }
+      continue t + 2
+    }
+    // The first level starts every row at the root, so it writes `idx`
+    // directly instead of filling it; the last level feeds the leaf straight
+    // into the margin instead of storing the node id.
+    if d >= 2 {
+      for r in 0..<n {
+        idx.set(r, nodes.step(root, ranks, r * width))
+      }
+      for _ in 2..<d {
+        for r in 0..<n {
+          // In bounds by construction: `build` stores only node ids of this
+          // forest and slots below `width`, and `ranks` holds `n` rows, so
+          // `step` reads without bounds checks.
+          let i = idx.get(r)
+          idx.set(r, nodes.step(i, ranks, r * width))
+        }
       }
     }
-    let g = tree_group[t]
-    let leaf_value = self.leaf_value
     for r in 0..<n {
       // in bounds: `margin` holds `n * groups` values and `idx` holds nodes
+      let i = if d >= 2 { idx.get(r) } else { root }
+      let leaf = if d >= 1 { nodes.step(i, ranks, r * width) } else { root }
       let k = r * groups + g
-      margin.unsafe_set(
-        k,
-        margin.unsafe_get(k) + leaf_value.unsafe_get(idx.get(r)),
-      )
+      margin.unsafe_set(k, margin.unsafe_get(k) + leaf_value.unsafe_get(leaf))
     }
+    continue t + 1
   }
 }

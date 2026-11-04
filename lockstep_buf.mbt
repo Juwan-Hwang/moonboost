@@ -17,8 +17,3 @@ fn Buf::get(self : Buf, i : Int32) -> Int32 {
 fn Buf::set(self : Buf, i : Int32, v : Int32) -> Unit {
   self.0.unsafe_set(i, v)
 }
-
-///|
-fn Buf::fill(self : Buf, v : Int32) -> Unit {
-  self.0.fill(v)
-}

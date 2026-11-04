@@ -80,7 +80,7 @@ pub fn Model::predict_margin(
       self.num_group,
       ranks,
       1,
-      Buf::new(1),
+      Buf::new(2),
       margin,
     )
     return Array::makei(self.num_group, g => margin[g])

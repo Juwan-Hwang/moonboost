@@ -18,6 +18,22 @@ pub fn ModelError::not_equal(Self, Self) -> Bool
 pub fn ModelError::to_repr(Self) -> @debug.Repr
 
 // Types and methods
+pub struct Model {
+  trees : Array[Tree]
+  tree_group : Array[Int32]
+  num_group : Int32
+  num_feature : Int32
+  base_margin : Float
+  objective : Objective
+  feature_names : Array[String]
+}
+pub fn Model::new(trees~ : Array[Tree], tree_group~ : Array[Int32], num_group~ : Int32, num_feature~ : Int32, base_score~ : Float, objective~ : Objective, feature_names? : Array[String]) -> Self raise ModelError
+pub fn Model::num_trees(Self) -> Int32
+pub fn Model::predict(Self, ArrayView[Float]) -> Array[Float]
+pub fn Model::predict_leaf(Self, ArrayView[Float]) -> Array[Int32]
+pub fn Model::predict_margin(Self, ArrayView[Float]) -> Array[Float]
+pub fn Model::predict_one(Self, ArrayView[Float]) -> Float
+
 #derive(Eq, @debug.Debug)
 pub(all) enum Objective {
   Identity(String)

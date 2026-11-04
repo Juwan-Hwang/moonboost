@@ -50,6 +50,19 @@ fn check(f : Fixture) -> Unit raise {
   if max_ulp > 2 {
     fail("\{f.name}: predictions differ by \{max_ulp} ulp")
   }
+  // The blocked batch path must agree with `predict` bit for bit.
+  let batch = model.predict_batch(
+    @moonboost.DenseMatrix::new(x, cols=f.num_feature),
+  )
+  for r in 0..<rows {
+    let p = model.predict(x[r * f.num_feature:(r + 1) * f.num_feature])
+    for k in 0..<f.pred_width {
+      if batch[r * f.pred_width + k].reinterpret_as_int() !=
+        p[k].reinterpret_as_int() {
+        fail("\{f.name}: predict_batch differs from predict at row \{r}")
+      }
+    }
+  }
 }
 
 ///|

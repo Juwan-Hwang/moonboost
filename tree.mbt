@@ -18,6 +18,7 @@ pub struct Tree {
   value : Array[Float]
   default_left : Array[Bool]
   categories : Array[Array[Int32]?]
+  priv compiled : Compiled
 }
 
 ///|
@@ -65,7 +66,17 @@ pub fn Tree::new(
       raise InvalidModel("node \{i} splits on negative feature \{feature[i]}")
     }
   }
-  { left, right, feature, value, default_left, categories, }
+  let t = {
+    left,
+    right,
+    feature,
+    value,
+    default_left,
+    categories,
+    compiled: empty_compiled(),
+  }
+  let compiled = compile([t], t.max_feature() + 1)
+  { ..t, compiled, }
 }
 
 ///|
@@ -90,50 +101,11 @@ pub fn Tree::max_feature(self : Tree) -> Int32 {
 /// Index of the leaf reached by `row`. Features beyond the end of `row` are
 /// treated as missing.
 pub fn Tree::leaf_index(self : Tree, row : ArrayView[Float]) -> Int32 {
-  let mut node = 0
-  while self.left[node] != -1 {
-    let f = self.feature[node]
-    let missing = f >= row.length() || row[f].is_nan()
-    node = if missing {
-      if self.default_left[node] {
-        self.left[node]
-      } else {
-        self.right[node]
-      }
-    } else {
-      match self.categories[node] {
-        None =>
-          if row[f] < self.value[node] {
-            self.left[node]
-          } else {
-            self.right[node]
-          }
-        Some(set) =>
-          if goes_right(set, row[f]) {
-            self.right[node]
-          } else {
-            self.left[node]
-          }
-      }
-    }
-  }
-  node
+  self.compiled.leaf(0, self.compiled.keys(row))
 }
 
 ///|
 /// Leaf weight reached by `row`.
 pub fn Tree::predict(self : Tree, row : ArrayView[Float]) -> Float {
   self.value[self.leaf_index(row)]
-}
-
-///|
-/// XGBoost's categorical decision: the value is truncated to an integer code;
-/// codes in `set` go right, everything else (including negative and
-/// out-of-range codes) goes left.
-fn goes_right(set : Array[Int32], x : Float) -> Bool {
-  if x < 0.0 || x >= 2147483648.0 {
-    return false
-  }
-  let code = x.to_int()
-  set.binary_search(code) is Ok(_)
 }

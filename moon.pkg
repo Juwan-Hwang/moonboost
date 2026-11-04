@@ -1,4 +1,5 @@
 import {
+  "Juwan-Hwang/moonboost/kernel",
   "moonbitlang/core/math",
   "moonbitlang/core/debug",
   "moonbitlang/core/json",

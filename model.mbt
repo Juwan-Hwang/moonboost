@@ -11,6 +11,7 @@ pub struct Model {
   base_margin : Float
   objective : Objective
   feature_names : Array[String]
+  priv compiled : Compiled
 }
 
 ///|
@@ -51,6 +52,7 @@ pub fn Model::new(
     base_margin: objective.base_margin(base_score),
     objective,
     feature_names,
+    compiled: compile(trees, num_feature),
   }
 }
 
@@ -68,9 +70,11 @@ pub fn Model::predict_margin(
   row : ArrayView[Float],
 ) -> Array[Float] {
   let out = Array::make(self.num_group, self.base_margin)
-  for i, t in self.trees {
-    let g = self.tree_group[i]
-    out[g] = out[g] + t.predict(row)
+  let c = self.compiled
+  let keys = c.keys(row)
+  for t in 0..<self.tree_group.length() {
+    let g = self.tree_group[t]
+    out[g] = out[g] + c.leaf_value[c.leaf(t, keys)]
   }
   out
 }
@@ -96,5 +100,7 @@ pub fn Model::predict_leaf(
   self : Model,
   row : ArrayView[Float],
 ) -> Array[Int32] {
-  self.trees.map(t => t.leaf_index(row))
+  let c = self.compiled
+  let keys = c.keys(row)
+  Array::makei(self.tree_group.length(), t => c.leaf(t, keys) - c.offsets[t])
 }

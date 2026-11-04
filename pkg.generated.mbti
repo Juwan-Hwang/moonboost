@@ -6,6 +6,9 @@ import {
 }
 
 // Values
+pub fn category_key(Float) -> Int32
+
+pub fn float_key(Float) -> Int32
 
 // Errors
 #derive(Eq, @debug.Debug)
@@ -18,6 +21,8 @@ pub fn ModelError::not_equal(Self, Self) -> Bool
 pub fn ModelError::to_repr(Self) -> @debug.Repr
 
 // Types and methods
+type Compiled
+
 pub struct DenseMatrix {
   data : Array[Float]
   rows : Int32
@@ -35,6 +40,7 @@ pub struct Model {
   base_margin : Float
   objective : Objective
   feature_names : Array[String]
+  // private fields
 }
 pub fn Model::from_xgboost_json(StringView) -> Self raise ModelError
 pub fn Model::new(trees~ : Array[Tree], tree_group~ : Array[Int32], num_group~ : Int32, num_feature~ : Int32, base_score~ : Float, objective~ : Objective, feature_names? : Array[String]) -> Self raise ModelError
@@ -69,6 +75,7 @@ pub struct Tree {
   value : Array[Float]
   default_left : Array[Bool]
   categories : Array[Array[Int32]?]
+  // private fields
 }
 pub fn Tree::leaf_index(Self, ArrayView[Float]) -> Int32
 pub fn Tree::max_feature(Self) -> Int32

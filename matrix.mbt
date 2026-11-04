@@ -84,13 +84,44 @@ pub fn DenseMatrix::from_csv(
 }
 
 ///|
+/// Rows processed together by `predict_batch`: each tree is walked for the
+/// whole block before moving to the next, so it stays in cache.
+const BLOCK : Int32 = 64
+
+///|
 /// Predict every row of `m`. The result is row-major with
-/// `self.output_width()` values per row.
+/// `self.output_width()` values per row. Gives exactly the same values as
+/// calling `predict` on each row.
 pub fn Model::predict_batch(self : Model, m : DenseMatrix) -> Array[Float] {
+  let c = self.compiled
+  let groups = self.num_group
   let out : Array[Float] = Array(capacity=m.rows * self.output_width())
-  for i in 0..<m.rows {
-    for v in self.predict(m.row(i)) {
-      out.push(v)
+  let keys = FixedArray::makei(BLOCK, _ => FixedArray::make(m.cols, 0))
+  let margin = FixedArray::make(BLOCK * groups, (0.0 : Float))
+  let row_out : Array[Float] = Array(capacity=groups)
+  for start = 0; start < m.rows; start = start + BLOCK {
+    let n = if m.rows - start < BLOCK { m.rows - start } else { BLOCK }
+    for r in 0..<n {
+      c.encode(m.row(start + r), keys[r])
+    }
+    margin.fill(self.base_margin)
+    for t in 0..<self.tree_group.length() {
+      let g = self.tree_group[t]
+      for r in 0..<n {
+        let k = r * groups + g
+        margin[k] = margin[k] + c.leaf_value[c.leaf(t, keys[r])]
+      }
+    }
+    for r in 0..<n {
+      // `transform` may shrink the array (softmax keeps only the class)
+      row_out.clear()
+      for g in 0..<groups {
+        row_out.push(margin[r * groups + g])
+      }
+      self.objective.transform(row_out)
+      for i in 0..<self.output_width() {
+        out.push(row_out[i])
+      }
     }
   }
   out

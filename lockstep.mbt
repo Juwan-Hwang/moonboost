@@ -30,14 +30,16 @@ const LEAF_THR : Int32 = 0xFFFF
 ///
 /// Leaves accumulate in tree order in float32, exactly as before.
 priv struct Lockstep {
-  // per node: [left child, (rank slot << 16) | threshold]
-  nodes : FixedArray[Int32]
+  // per node: left child and (rank slot << 16) | threshold; see `Nodes`
+  nodes : Nodes
   leaf_value : FixedArray[Float]
   roots : FixedArray[Int32]
   depth : FixedArray[Int32]
-  // sorted distinct threshold keys, feature f at cuts[cut_start[f]:cut_start[f+1]]
-  cuts : FixedArray[Int32]
-  cut_start : FixedArray[Int32]
+  // sorted distinct threshold keys of each feature, padded with `Int32::max`
+  // to a power of two, so a rank is a fixed number of branch-free halvings
+  search : FixedArray[Int32]
+  search_start : FixedArray[Int32]
+  search_half : FixedArray[Int32]
   num_feature : Int32
 }
 
@@ -71,8 +73,24 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
     cut_start[f + 1] = cuts.length()
   }
   let cuts = FixedArray::from_array(cuts)
+  let search : Array[Int32] = []
+  let search_start = FixedArray::make(num_feature, 0)
+  let search_half = FixedArray::make(num_feature, 0)
+  for f in 0..<num_feature {
+    let c = cut_start[f + 1] - cut_start[f]
+    let mut p = 1
+    while p < c + 1 {
+      p *= 2
+    }
+    search_start[f] = search.length()
+    search_half[f] = p / 2
+    for i in 0..<p {
+      search.push(if i < c { cuts[cut_start[f] + i] } else { 0x7FFFFFFF })
+    }
+  }
+  let search = FixedArray::from_array(search)
   let total = trees.fold(init=0, (acc, t) => acc + t.num_nodes())
-  let nodes = FixedArray::make(2 * total, 0)
+  let nodes = Nodes::make(total)
   let leaf_value = FixedArray::make(total, (0.0 : Float))
   let roots = FixedArray::make(trees.length(), 0)
   let depth = FixedArray::make(trees.length(), 0)
@@ -93,8 +111,7 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
         d_max = d
       }
       if t.left[old] == -1 {
-        nodes[2 * id] = id
-        nodes[2 * id + 1] = LEAF_THR
+        nodes.set(id, id, LEAF_THR)
         leaf_value[id] = t.value[old]
         continue
       }
@@ -106,8 +123,7 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
         cut_start[f + 1],
         float_key(t.value[old]),
       )
-      nodes[2 * id] = next
-      nodes[2 * id + 1] = (slot << 16) | (k - cut_start[f] + 1)
+      nodes.set(id, next, (slot << 16) | (k - cut_start[f] + 1))
       queue.push((t.left[old], next, d + 1))
       queue.push((t.right[old], next + 1, d + 1))
       next += 2
@@ -118,7 +134,16 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
   if 2 * num_feature >= 0x8000 {
     return None
   }
-  Some({ nodes, leaf_value, roots, depth, cuts, cut_start, num_feature, })
+  Some({
+    nodes,
+    leaf_value,
+    roots,
+    depth,
+    search,
+    search_start,
+    search_half,
+    num_feature,
+  })
 }
 
 ///|
@@ -162,17 +187,16 @@ fn Lockstep::ranks(
     } else {
       // number of thresholds <= x
       let key = float_key(x)
-      let lo = self.cut_start[f]
-      let r = for i = lo, j = self.cut_start[f + 1]; i < j; {
-        let mid = i + (j - i) / 2
-        if self.cuts[mid] <= key {
-          continue mid + 1, j
-        } else {
-          continue i, mid
-        }
-      } nobreak {
-        i - lo
+      let s = self.search
+      let lo = self.search_start[f]
+      let mut b = lo
+      let mut step = self.search_half[f]
+      while step > 0 {
+        // in bounds: b + step - 1 < lo + 2 * half - 1, the padded length
+        b = b + (if s.unsafe_get(b + step - 1) <= key { step } else { 0 })
+        step = step / 2
       }
+      let r = b - lo
       out[at + 2 * f] = r
       out[at + 2 * f + 1] = r
     }
@@ -201,15 +225,10 @@ fn Lockstep::accumulate(
     for _ in 0..<self.depth[t] {
       for r in 0..<n {
         // In bounds by construction: `build` stores only node ids of this
-        // forest and slots below `width`, and `ranks` holds `n` rows.
+        // forest and slots below `width`, and `ranks` holds `n` rows, so
+        // `step` reads without bounds checks.
         let i = idx.unsafe_get(r)
-        let w = nodes.unsafe_get(2 * i + 1)
-        let go = if ranks.unsafe_get(r * width + (w >> 16)) >= (w & 0xFFFF) {
-          1
-        } else {
-          0
-        }
-        idx.unsafe_set(r, nodes.unsafe_get(2 * i) + go)
+        idx.unsafe_set(r, nodes.step(i, ranks, r * width))
       }
     }
     let g = tree_group[t]

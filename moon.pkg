@@ -9,3 +9,10 @@ import {
 import {
   "moonbitlang/core/float",
 } for "test"
+
+options(
+  targets: {
+    "lockstep_nodes_int64.mbt": [ "not", "js" ],
+    "lockstep_nodes_js.mbt": [ "js" ],
+  },
+)

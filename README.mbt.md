@@ -80,20 +80,39 @@ proof; that is covered by the differential tests against XGBoost.
 
 ## Performance
 
-Batch prediction, 10,000 rows of 32 features (5% missing), single thread,
-measured with `bench/` on an aarch64 Linux VM. Lower is better.
+Batch prediction, 10,000 rows of 32 features (5% missing), single thread, on
+an aarch64 Linux VM (Neoverse-V2). µs per row, best of five runs, lower is
+better. XGBoost is timed through its C API (`XGBoosterPredictFromDense`,
+`nthread=1`), so no Python is in its loop.
 
-| Model | moonboost native | moonboost JS (Node 22) | XGBoost 3.4.1 C++ |
+| Model | moonboost native | moonboost JS (Node 22) | XGBoost 3.4.1 C API |
 |---|---|---|---|
-| 100 trees, depth 4 | 2.1 µs/row | 11.5 µs/row | 1.1 µs/row |
-| 500 trees, depth 8 | 25.9 µs/row | 81.8 µs/row | 13.4 µs/row |
-| 1000 trees, depth 10 | 64.0 µs/row | 185.6 µs/row | 39.0 µs/row |
+| 100 trees, depth 4 | 0.67 | 7.1 | 1.05 |
+| 500 trees, depth 8 | 4.73 | 53.4 | 12.97 |
+| 1000 trees, depth 10 | 12.07 | 129.6 | 34.63 |
 
-The native build is within 2x of XGBoost's own C++ predictor; closing that
-gap (and the JS one) is the next milestone. The minified JS bundle is
-124 KB, 41.6 KB gzipped, with no other runtime needed. Reproduce with
+All 30,000 predictions are bit-for-bit identical to XGBoost's. Reproduce with
 `python3 bench/gen_models.py`, then `moonboost bench`, `node
-bench/node_bench.mjs` and `python3 bench/xgb_bench.py`.
+bench/node_bench.mjs`, and `bench/xgb_capi_bench.c` (build line at its top).
+
+How the batch path works (`lockstep.mbt`):
+
+- **Ranks instead of floats.** The distinct split thresholds of each feature
+  are sorted once. A row value is replaced by its rank among them, found by a
+  branch-free search, and a split on the `k`-th threshold becomes
+  `rank >= k + 1`. Exact, because `x < t_k` holds exactly when fewer than
+  `k + 1` thresholds are `<= x`.
+- **Missing values cost nothing.** Each feature has two rank slots, one
+  holding 0 and one holding a value above every threshold when the input is
+  missing. A split reads whichever slot matches its default direction.
+- **Self-looping leaves.** Children sit side by side, so the next node is
+  `left + go_right`, and a leaf is its own left child with a threshold no rank
+  reaches. Every row takes the same number of steps through a tree, so 64 rows
+  walk it in lockstep with no branches.
+
+Leaves are still added in tree order in float32, which is what keeps the
+results identical. Models with categorical splits use the verified kernel.
+The minified JS bundle is 129 KB, 42.9 KB gzipped, with no other runtime.
 
 ## Usage
 

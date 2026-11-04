@@ -4,7 +4,8 @@ For every case we train a small model with XGBoost, save it as JSON, and record
 the exact float32 bit patterns of the inputs, the raw margins and the final
 predictions. `moon test` then checks moonboost against these numbers.
 
-Usage: python3 tools/gen_fixtures.py   (needs xgboost, scikit-learn, numpy)
+Usage: python3 tools/gen_fixtures.py && moon fmt
+       (needs xgboost, scikit-learn, numpy, pandas)
 """
 import json
 import numpy as np

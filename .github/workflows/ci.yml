@@ -13,7 +13,7 @@ jobs:
       matrix:
         target: [wasm, wasm-gc, js, native]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install MoonBit
         run: |
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
@@ -25,7 +25,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install MoonBit
         run: |
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
@@ -42,10 +42,17 @@ jobs:
     # XGBoost release they claim to come from.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install xgboost==3.4.1 scikit-learn numpy pandas
-      - run: python3 tools/gen_fixtures.py
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - name: Regenerate fixtures
+        run: |
+          python3 tools/gen_fixtures.py
+          moon fmt
       - run: git diff --stat --exit-code xgboost_fixtures_test.mbt

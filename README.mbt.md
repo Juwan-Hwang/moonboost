@@ -30,8 +30,10 @@ trust because it is tested against XGBoost itself.
 | CLI | done |
 | `dart`, `gblinear` boosters | planned |
 | LightGBM text models | planned |
-| Formal proofs with `moon prove` | planned |
-| Tree compilation for faster inference | planned |
+| Verified tree-walking kernel (`moon prove`) | done |
+| Blocked batch prediction | done |
+| ES module for browsers and Node (`web/`) | done |
+| XGBoost UBJSON models | planned |
 | Training | planned |
 
 ## Correctness
@@ -50,9 +52,48 @@ multiclass `softprob` and `softmax`, Poisson regression, and a model with two
 categorical features. CI regenerates the fixtures from the pinned XGBoost
 release and fails if anything drifts.
 
+On the three benchmark models below, all 30,000 final predictions match
+XGBoost exactly on both the native and the JS build.
+
 The trick is to do what XGBoost does: keep every value in 32-bit floats,
 compare `x < threshold` in float32, start from the objective's base margin,
 and accumulate trees in order.
+
+## Verified kernel
+
+Tree walking lives in its own package, `kernel/`, written so that
+`moon prove` (Why3 + Z3) can check it. CI runs the proofs on every push.
+What is proved:
+
+- `Forest::new` returns a forest only if every split node points strictly
+  forward to in-range children, every root is in range, and every
+  categorical split refers to a valid slice of the category table;
+- for such a forest, `Forest::leaf` always terminates, never indexes out of
+  bounds (nodes, row, category table) and returns a leaf.
+
+So a malformed or malicious model file can be rejected, but cannot make
+prediction loop forever or read out of bounds. To keep floating point out of
+the proof, the kernel compares integer keys: `float_key` maps every non-NaN
+float32 to an `Int` with the same order (tested over random bit patterns,
+zeros, subnormals and infinities). Which way a split goes is not part of the
+proof; that is covered by the differential tests against XGBoost.
+
+## Performance
+
+Batch prediction, 10,000 rows of 32 features (5% missing), single thread,
+measured with `bench/` on an aarch64 Linux VM. Lower is better.
+
+| Model | moonboost native | moonboost JS (Node 22) | XGBoost 3.4.1 C++ |
+|---|---|---|---|
+| 100 trees, depth 4 | 2.1 µs/row | 11.5 µs/row | 1.1 µs/row |
+| 500 trees, depth 8 | 25.9 µs/row | 81.8 µs/row | 13.4 µs/row |
+| 1000 trees, depth 10 | 64.0 µs/row | 185.6 µs/row | 39.0 µs/row |
+
+The native build is within 2x of XGBoost's own C++ predictor; closing that
+gap (and the JS one) is the next milestone. The minified JS bundle is
+124 KB, 41.6 KB gzipped, with no other runtime needed. Reproduce with
+`python3 bench/gen_models.py`, then `moonboost bench`, `node
+bench/node_bench.mjs` and `python3 bench/xgb_bench.py`.
 
 ## Usage
 
@@ -91,6 +132,20 @@ fn predict_csv(
   model.predict_batch(data) // row-major, model.output_width() values per row
 }
 ```
+
+## JavaScript
+
+```
+moon build --target js --release
+```
+
+```js
+import { load_model, predict, predict_batch } from "./_build/js/release/build/web/web.js";
+const model = load_model(jsonText);
+predict(model, [5.1, 3.5, 1.4, 0.2]);
+```
+
+See `examples/node/iris.mjs`.
 
 ## CLI
 

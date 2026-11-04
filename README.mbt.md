@@ -64,11 +64,16 @@ moon add Juwan-Hwang/moonboost
 
 Load a model saved with `booster.save_model("model.json")` and predict:
 
-```moonbit
-let model = @moonboost.Model::from_xgboost_json(json_text)
-let probs = model.predict([5.1, 3.5, 1.4, 0.2])      // Array[Float]
-let margin = model.predict_margin([5.1, 3.5, 1.4, 0.2])
-let leaves = model.predict_leaf([5.1, 3.5, 1.4, 0.2])
+```moonbit nocheck
+///|
+fn predict_iris(json_text : String) -> Unit raise {
+  let model = @moonboost.Model::from_xgboost_json(json_text)
+  let row : Array[Float] = [5.1, 3.5, 1.4, 0.2]
+  let probs = model.predict(row) // class probabilities
+  let margin = model.predict_margin(row) // raw scores
+  let leaves = model.predict_leaf(row) // leaf index per tree
+  println("\{probs} \{margin} \{leaves}")
+}
 ```
 
 Missing values are `NaN`. Categorical features are passed as their integer
@@ -76,9 +81,15 @@ category codes, as XGBoost sees them.
 
 Batch prediction:
 
-```moonbit
-let data = @moonboost.DenseMatrix::from_csv(csv_text, header=true)
-let out = model.predict_batch(data) // row-major, model.output_width() per row
+```moonbit nocheck
+///|
+fn predict_csv(
+  model : @moonboost.Model,
+  csv_text : String,
+) -> Array[Float] raise {
+  let data = @moonboost.DenseMatrix::from_csv(csv_text, header=true)
+  model.predict_batch(data) // row-major, model.output_width() values per row
+}
 ```
 
 ## CLI

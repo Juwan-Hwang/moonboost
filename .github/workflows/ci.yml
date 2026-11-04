@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [wasm, wasm-gc, js, native]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - run: moon version --all
+      - run: moon check --target ${{ matrix.target }} --deny-warn
+      - run: moon test --target ${{ matrix.target }}
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - name: Formatting
+        run: moon fmt --check
+      - name: Public interface is up to date
+        run: |
+          moon info
+          git diff --exit-code -- '*.mbti'
+
+  fixtures:
+    # The differential-test fixtures must be reproducible from the reference
+    # XGBoost release they claim to come from.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install xgboost==3.4.1 scikit-learn numpy pandas
+      - run: python3 tools/gen_fixtures.py
+      - run: git diff --stat --exit-code xgboost_fixtures_test.mbt

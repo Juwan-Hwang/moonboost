@@ -30,7 +30,7 @@ def case(name, X, y, params, rounds, feature_types=None):
     X = with_missing(X)
     d = xgb.DMatrix(X, label=y, feature_types=feature_types,
                     enable_categorical=feature_types is not None)
-    b = xgb.train(params | {"seed": 0}, d, rounds)
+    b = xgb.train(params | {"seed": 0, "nthread": 1}, d, rounds)
     model = b.save_raw("json").decode()
     rows = X[:ROWS]
     dm = xgb.DMatrix(rows, feature_types=feature_types,

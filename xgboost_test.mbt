@@ -103,3 +103,18 @@ test "rejects non-gbtree boosters" {
 test "xgboost categorical splits" {
   check(fixture_categorical)
 }
+
+///|
+test "xgboost gamma regression" {
+  check(fixture_gamma)
+}
+
+///|
+test "xgboost tweedie regression" {
+  check(fixture_tweedie)
+}
+
+///|
+test "xgboost binary logitraw" {
+  check(fixture_binary_logitraw)
+}

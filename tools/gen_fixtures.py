@@ -81,6 +81,17 @@ def main():
     cases.append(case("poisson", Xd, yp,
                       {"objective": "count:poisson", "max_depth": 4}, 30))
 
+    # Strictly positive targets for the gamma and tweedie log-link objectives.
+    yg = rng.gamma(2.0, np.exp(Xd[:, 2] * 4 + 0.5))
+    cases.append(case("gamma", Xd, yg,
+                      {"objective": "reg:gamma", "max_depth": 4}, 30))
+    yt = np.where(rng.random(len(Xd)) < 0.3, 0.0, yg)
+    cases.append(case("tweedie", Xd, yt,
+                      {"objective": "reg:tweedie", "tweedie_variance_power": 1.5,
+                       "max_depth": 4}, 30))
+    cases.append(case("binary_logitraw", Xb, yb,
+                      {"objective": "binary:logitraw", "max_depth": 3}, 30))
+
     # Two categorical features (codes 0..9 and 0..4) plus two numeric ones.
     n = 3000
     c1 = rng.integers(0, 10, n)

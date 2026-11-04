@@ -2,6 +2,7 @@ import {
   "Juwan-Hwang/moonboost",
   "moonbitlang/x/fs",
   "moonbitlang/core/env",
+  "moonbitlang/core/string",
 }
 
 pkgtype(kind: "executable")

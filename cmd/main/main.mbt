@@ -5,17 +5,23 @@ const USAGE : String =
   #|USAGE:
   #|  moonboost info    <model.json>
   #|  moonboost predict <model.json> <data.csv> [--header] [--margin] [--leaf]
+  #|  moonboost bench   <model.json> <data.csv> [--header] [--repeat N]
   #|
   #|predict prints one CSV line per input row:
   #|  default   final predictions (probabilities, values or class index)
   #|  --margin  raw scores before the link function
   #|  --leaf    leaf index reached in every tree
   #|
+  #|bench times batch prediction and prints rows per second and the
+  #|average latency per row.
+  #|
   #|Models are XGBoost JSON files (Booster.save_model("model.json")).
   #|Empty cells, NA and NaN in the CSV are treated as missing.
 
 ///|
-let commands : Array[String] = ["info", "predict", "help", "--help", "-h"]
+let commands : Array[String] = [
+  "info", "predict", "bench", "help", "--help", "-h",
+]
 
 ///|
 suberror CliError {
@@ -77,6 +83,49 @@ fn predict(args : ArrayView[String]) -> Unit raise {
 }
 
 ///|
+fn bench(args : ArrayView[String]) -> Unit raise {
+  let mut repeat = 10
+  let files = []
+  let mut i = 0
+  while i < args.length() {
+    let a = args[i]
+    if a == "--repeat" && i + 1 < args.length() {
+      repeat = @string.parse_int(args[i + 1])
+      i += 2
+      continue
+    }
+    if !a.has_prefix("--") {
+      files.push(a)
+    }
+    i += 1
+  }
+  if files.length() != 2 {
+    raise CliError("bench needs <model.json> <data.csv>")
+  }
+  let t0 = @env.now()
+  let model = load_model(files[0])
+  let t1 = @env.now()
+  let data = @moonboost.DenseMatrix::from_csv(
+    @fs.read_file_to_string(files[1]),
+    header=args.contains("--header"),
+  )
+  // warm up, and keep the result alive so the work is not optimised away
+  let mut check = model.predict_batch(data)[0]
+  let t2 = @env.now()
+  for _ in 0..<repeat {
+    check = check + model.predict_batch(data)[0]
+  }
+  let t3 = @env.now()
+  let ms = (t3 - t2).to_double()
+  let rows = data.rows.to_double() * repeat.to_double()
+  println("load:       \{(t1 - t0).to_double()} ms")
+  println("rows:       \{data.rows} x \{repeat}")
+  println("throughput: \{(rows / ms * 1000.0).to_int64()} rows/s")
+  println("latency:    \{ms * 1000.0 / rows} us/row")
+  println("checksum:   \{check}")
+}
+
+///|
 fn main {
   let args = @env.args()
   // The runtime may prepend its own entries (e.g. `node main.js`), so start
@@ -91,6 +140,7 @@ fn main {
     match rest[0] {
       "info" if rest.length() == 2 => info(rest[1])
       "predict" => predict(rest[1:])
+      "bench" => bench(rest[1:])
       "help" | "--help" | "-h" => println(USAGE)
       _ => raise CliError("unknown command; run `moonboost help`")
     }

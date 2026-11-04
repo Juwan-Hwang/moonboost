@@ -19,7 +19,13 @@ repository = "https://github.com/Juwan-Hwang/moonboost"
 
 license = "Apache-2.0"
 
-keywords = ["gbdt", "xgboost", "machine-learning", "gradient-boosting", "decision-tree"]
+keywords = [
+  "gbdt",
+  "xgboost",
+  "machine-learning",
+  "gradient-boosting",
+  "decision-tree",
+]
 
 preferred_target = "wasm"
 

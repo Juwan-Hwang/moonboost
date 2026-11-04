@@ -85,3 +85,8 @@ test "rejects non-gbtree boosters" {
   let r = Ok(@moonboost.Model::from_xgboost_json(json)) catch { e => Err(e) }
   inspect(r is Err(Unsupported(_)), content="true")
 }
+
+///|
+test "xgboost categorical splits" {
+  check(fixture_categorical)
+}

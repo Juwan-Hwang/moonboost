@@ -54,3 +54,23 @@ test "max_feature ignores leaves" {
   inspect(t.max_feature(), content="7")
   inspect(t.num_nodes(), content="5")
 }
+
+///|
+test "categorical split sends listed codes right" {
+  // node 0 splits on categories {1, 3} of feature 0; missing goes left
+  let t = @moonboost.Tree::new(
+    left=[1, -1, -1],
+    right=[2, -1, -1],
+    feature=[0, 0, 0],
+    value=[0.0, -1.0, 1.0],
+    default_left=[true, false, false],
+    categories=[Some([3, 1]), None, None],
+  )
+  inspect(t.predict([1.0]), content="1")
+  inspect(t.predict([3.0]), content="1")
+  inspect(t.predict([3.7]), content="1") // truncated to code 3
+  inspect(t.predict([2.0]), content="-1")
+  inspect(t.predict([-1.0]), content="-1") // invalid codes go left
+  inspect(t.predict([1.0e10]), content="-1")
+  inspect(t.predict([]), content="-1") // missing follows default_left
+}

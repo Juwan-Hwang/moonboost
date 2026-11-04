@@ -6,6 +6,9 @@
 /// goes left when `x[feature[i]] < value[i]`. Missing values (NaN) follow
 /// `default_left[i]`.
 ///
+/// A node may instead be a categorical split: `categories[i]` holds the sorted
+/// category codes that go right; every other non-missing code goes left.
+///
 /// All arithmetic is done in 32-bit floats, matching XGBoost's `bst_float`,
 /// so that comparisons against thresholds behave bit-for-bit the same.
 pub struct Tree {
@@ -14,6 +17,7 @@ pub struct Tree {
   feature : Array[Int32]
   value : Array[Float]
   default_left : Array[Bool]
+  categories : Array[Array[Int32]?]
 }
 
 ///|
@@ -23,6 +27,7 @@ pub fn Tree::new(
   feature~ : Array[Int32],
   value~ : Array[Float],
   default_left~ : Array[Bool],
+  categories~ : Array[Array[Int32]?] = [],
 ) -> Tree raise ModelError {
   let n = left.length()
   if n == 0 {
@@ -33,6 +38,19 @@ pub fn Tree::new(
     value.length() != n ||
     default_left.length() != n {
     raise InvalidModel("tree arrays have inconsistent lengths")
+  }
+  let categories = if categories.length() == 0 {
+    Array::make(n, None)
+  } else if categories.length() != n {
+    raise InvalidModel("categories length \{categories.length()} != \{n}")
+  } else {
+    categories.map(c => {
+      c.map(set => {
+        let sorted = set.copy()
+        sorted.sort()
+        sorted
+      })
+    })
   }
   for i in 0..<n {
     let l = left[i]
@@ -47,7 +65,7 @@ pub fn Tree::new(
       raise InvalidModel("node \{i} splits on negative feature \{feature[i]}")
     }
   }
-  { left, right, feature, value, default_left, }
+  { left, right, feature, value, default_left, categories, }
 }
 
 ///|
@@ -82,10 +100,21 @@ pub fn Tree::leaf_index(self : Tree, row : ArrayView[Float]) -> Int32 {
       } else {
         self.right[node]
       }
-    } else if row[f] < self.value[node] {
-      self.left[node]
     } else {
-      self.right[node]
+      match self.categories[node] {
+        None =>
+          if row[f] < self.value[node] {
+            self.left[node]
+          } else {
+            self.right[node]
+          }
+        Some(set) =>
+          if goes_right(set, row[f]) {
+            self.right[node]
+          } else {
+            self.left[node]
+          }
+      }
     }
   }
   node
@@ -95,4 +124,16 @@ pub fn Tree::leaf_index(self : Tree, row : ArrayView[Float]) -> Int32 {
 /// Leaf weight reached by `row`.
 pub fn Tree::predict(self : Tree, row : ArrayView[Float]) -> Float {
   self.value[self.leaf_index(row)]
+}
+
+///|
+/// XGBoost's categorical decision: the value is truncated to an integer code;
+/// codes in `set` go right, everything else (including negative and
+/// out-of-range codes) goes left.
+fn goes_right(set : Array[Int32], x : Float) -> Bool {
+  if x < 0.0 || x >= 2147483648.0 {
+    return false
+  }
+  let code = x.to_int()
+  set.binary_search(code) is Ok(_)
 }

@@ -68,10 +68,11 @@ pub struct Tree {
   feature : Array[Int32]
   value : Array[Float]
   default_left : Array[Bool]
+  categories : Array[Array[Int32]?]
 }
 pub fn Tree::leaf_index(Self, ArrayView[Float]) -> Int32
 pub fn Tree::max_feature(Self) -> Int32
-pub fn Tree::new(left~ : Array[Int32], right~ : Array[Int32], feature~ : Array[Int32], value~ : Array[Float], default_left~ : Array[Bool]) -> Self raise ModelError
+pub fn Tree::new(left~ : Array[Int32], right~ : Array[Int32], feature~ : Array[Int32], value~ : Array[Float], default_left~ : Array[Bool], categories? : Array[Array[Int32]?]) -> Self raise ModelError
 pub fn Tree::num_nodes(Self) -> Int32
 pub fn Tree::predict(Self, ArrayView[Float]) -> Float
 

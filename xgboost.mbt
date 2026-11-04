@@ -74,28 +74,49 @@ fn float_array(j : Json, what : String) -> Array[Float] raise ModelError {
 ///|
 fn parse_tree(j : Json) -> Tree raise ModelError {
   let t = as_object(j, "tree")
+  let left = int_array(field(t, "left_children"), "left_children")
   let split_type = int_array(field(t, "split_type"), "split_type")
-  for k in split_type {
-    if k != 0 {
-      raise Unsupported("categorical splits")
+  let categories : Array[Array[Int32]?] = Array::make(left.length(), None)
+  if split_type.iter().any(k => k != 0) {
+    let cats = int_array(field(t, "categories"), "categories")
+    let nodes = int_array(field(t, "categories_nodes"), "categories_nodes")
+    let segs = int_array(field(t, "categories_segments"), "categories_segments")
+    let sizes = int_array(field(t, "categories_sizes"), "categories_sizes")
+    if nodes.length() != segs.length() || nodes.length() != sizes.length() {
+      raise InvalidModel("categorical split arrays have inconsistent lengths")
+    }
+    for i, node in nodes {
+      let start = segs[i]
+      let end = start + sizes[i]
+      if node < 0 || node >= left.length() || start < 0 || end > cats.length() {
+        raise InvalidModel("categorical split \{i} is out of range")
+      }
+      categories[node] = Some(cats[start:end].to_owned())
+    }
+    for i, k in split_type {
+      if k != 0 && categories[i] is None {
+        raise InvalidModel("node \{i} is categorical but has no categories")
+      }
     }
   }
   Tree::new(
-    left=int_array(field(t, "left_children"), "left_children"),
+    left~,
     right=int_array(field(t, "right_children"), "right_children"),
     feature=int_array(field(t, "split_indices"), "split_indices"),
     value=float_array(field(t, "split_conditions"), "split_conditions"),
     default_left=int_array(field(t, "default_left"), "default_left").map(x => {
       x != 0
     }),
+    categories~,
   )
 }
 
 ///|
 /// Load a model saved by XGBoost's `Booster.save_model("model.json")`.
 ///
-/// Supports the `gbtree` booster with numerical splits. Raises `Unsupported`
-/// for `gblinear`, `dart` and categorical splits.
+/// Supports the `gbtree` booster with numerical and categorical splits.
+/// Categorical features are passed as their integer codes. Raises
+/// `Unsupported` for `gblinear` and `dart`.
 pub fn Model::from_xgboost_json(text : StringView) -> Model raise ModelError {
   let root = @json.parse(text) catch {
     e => raise InvalidModel("invalid JSON: \{e}")

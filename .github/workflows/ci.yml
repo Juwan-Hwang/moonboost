@@ -19,6 +19,7 @@ jobs:
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
       - run: moon version --all
+      - run: moon update
       - run: moon check --target ${{ matrix.target }} --deny-warn
       - run: moon test --target ${{ matrix.target }}
 
@@ -30,6 +31,7 @@ jobs:
         run: |
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - run: moon update
       - name: Formatting
         run: moon fmt --check
       - name: Public interface is up to date

@@ -1,16 +1,39 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "Juwan-Hwang/moonboost"
 
+import {
+  "moonbitlang/core/debug",
+}
+
 // Values
 
 // Errors
-#derive(Eq, Show)
+#derive(Eq, @debug.Debug)
 pub(all) suberror ModelError {
   InvalidModel(String)
   Unsupported(String)
 }
+pub fn ModelError::equal(Self, Self) -> Bool
+pub fn ModelError::not_equal(Self, Self) -> Bool
+pub fn ModelError::to_repr(Self) -> @debug.Repr
 
 // Types and methods
+#derive(Eq, @debug.Debug)
+pub(all) enum Objective {
+  Identity(String)
+  Logistic(String)
+  Exp(String)
+  Softprob(Int32)
+  Softmax(Int32)
+}
+pub fn Objective::base_margin(Self, Float) -> Float
+pub fn Objective::equal(Self, Self) -> Bool
+pub fn Objective::from_name(String, num_class? : Int32) -> Self raise ModelError
+pub fn Objective::name(Self) -> String
+pub fn Objective::not_equal(Self, Self) -> Bool
+pub fn Objective::to_repr(Self) -> @debug.Repr
+pub fn Objective::transform(Self, Array[Float]) -> Unit
+
 pub struct Tree {
   left : Array[Int32]
   right : Array[Int32]

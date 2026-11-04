@@ -1,3 +1,8 @@
 import {
-  "moonbitlang/core/float",
+  "moonbitlang/core/math",
+  "moonbitlang/core/debug",
 }
+
+import {
+  "moonbitlang/core/float",
+} for "test"

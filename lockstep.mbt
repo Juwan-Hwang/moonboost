@@ -200,14 +200,16 @@ fn Lockstep::accumulate(
     }
     for _ in 0..<self.depth[t] {
       for r in 0..<n {
-        let i = idx[r]
-        let w = nodes[2 * i + 1]
-        let go = if ranks[r * width + (w >> 16)] >= (w & 0xFFFF) {
+        // In bounds by construction: `build` stores only node ids of this
+        // forest and slots below `width`, and `ranks` holds `n` rows.
+        let i = idx.unsafe_get(r)
+        let w = nodes.unsafe_get(2 * i + 1)
+        let go = if ranks.unsafe_get(r * width + (w >> 16)) >= (w & 0xFFFF) {
           1
         } else {
           0
         }
-        idx[r] = nodes[2 * i] + go
+        idx.unsafe_set(r, nodes.unsafe_get(2 * i) + go)
       }
     }
     let g = tree_group[t]

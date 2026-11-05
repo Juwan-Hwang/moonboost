@@ -87,9 +87,9 @@ better. XGBoost is timed through its C API (`XGBoosterPredictFromDense`,
 
 | Model | moonboost native | moonboost JS (Node 22) | moonboost wasm / wasm-gc (moonrun) | XGBoost 3.4.1 C API |
 |---|---|---|---|---|
-| 100 trees, depth 4 | 0.46 | 2.2 | 1.3 / 1.4 | 1.00 |
-| 500 trees, depth 8 | 3.32 | 11.6 | 6.7 / 9.1 | 12.2 |
-| 1000 trees, depth 10 | 8.3 | 33.6 | 15.7 / 22.1 | 33.9 |
+| 100 trees, depth 4 | 0.46 | 2.7 | 1.3 / 1.4 | 1.00 |
+| 500 trees, depth 8 | 3.30 | 12.4 | 6.7 / 9.2 | 12.3 |
+| 1000 trees, depth 10 | 8.5 | 28.4 | 15.8 / 22.2 | 34.1 |
 
 One row per call (rows predicted one at a time, µs per row), which is what
 an online caller pays. For XGBoost this is one `XGBoosterPredictFromDense`
@@ -97,9 +97,9 @@ call per row, so its per-call overhead is included.
 
 | Model | moonboost native | moonboost JS (Node 22) | moonboost wasm / wasm-gc (moonrun) | XGBoost 3.4.1 C API |
 |---|---|---|---|---|
-| 100 trees, depth 4 | 0.8 | 3.3 | 2.3 / 1.8 | 12.3 |
-| 500 trees, depth 8 | 5.3 | 12.1 | 13.1 / 9.3 | 82 |
-| 1000 trees, depth 10 | 15.6 | 64 | 45 / 25 | 302 |
+| 100 trees, depth 4 | 0.7 | 3.5 | 2.3 / 1.8 | 12.4 |
+| 500 trees, depth 8 | 5.2 | 12.4 | 13.6 / 9.9 | 85 |
+| 1000 trees, depth 10 | 17.2 | 70 | 43 / 27 | 361 |
 
 Loading the 1000-tree model (a 19 MB JSON file) takes 325 ms native and
 360 ms in Node, where the JS build parses with the engine's own
@@ -132,7 +132,8 @@ How the batch path works (`lockstep.mbt`):
   `2h + 1`; a shallow leaf is extended by nodes that always go right), with
   split words in an `Int32Array` and leaves in a `Float32Array`. A step then
   reads no child index, which V8 rewards; native and wasm keep the compact
-  layout, which is faster there.
+  layout, which is faster there. A heap forest over 4 MB is walked 256 rows
+  at a time instead of 64, so it streams through the cache fewer times.
 
 Leaves are still added in tree order in float32, which is what keeps the
 results identical. Models with categorical splits use the verified kernel.

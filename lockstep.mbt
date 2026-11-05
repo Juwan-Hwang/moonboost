@@ -51,6 +51,8 @@ priv struct Lockstep {
   heap_leaf : FBuf
   heap_depth : Int32
   heap_size : Int32
+  // rows per batch block (see `Model::predict_batch`)
+  block : Int32
 }
 
 ///|
@@ -185,6 +187,14 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
     heap_leaf,
     heap_depth,
     heap_size,
+    // a heap forest larger than about 4 MB is streamed once per block, so
+    // bigger blocks pay off; measured in V8
+    block: if heap_depth > 0 &&
+      trees.length().to_int64() * heap_size.to_int64() * 8L > 0x400000L {
+      256
+    } else {
+      BLOCK
+    },
     // the heap copy replaces the compact one, so drop it
     nodes: if heap_depth > 0 {
       Nodes::make(0)

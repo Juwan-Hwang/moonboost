@@ -96,16 +96,22 @@ pub fn Model::predict_batch(self : Model, m : DenseMatrix) -> Array[Float] {
   let c = self.compiled
   let groups = self.num_group
   let out : Array[Float] = Array(capacity=m.rows * self.output_width())
-  let keys = FixedArray::makei(BLOCK, _ => FixedArray::make(m.cols, 0))
-  let margin = FixedArray::make(BLOCK * groups, (0.0 : Float))
+  // rows per block: the lockstep form may ask for more to stream a large
+  // forest fewer times
+  let block = match self.fast {
+    Some(fast) => fast.block
+    None => BLOCK
+  }
+  let keys = FixedArray::makei(block, _ => FixedArray::make(m.cols, 0))
+  let margin = FixedArray::make(block * groups, (0.0 : Float))
   let row_out : Array[Float] = Array(capacity=groups)
   let ranks = match self.fast {
-    Some(fast) => Buf::new(BLOCK * 2 * fast.num_feature)
+    Some(fast) => Buf::new(block * 2 * fast.num_feature)
     None => Buf::new(0)
   }
-  let idx = Buf::new(2 * BLOCK)
-  for start = 0; start < m.rows; start = start + BLOCK {
-    let n = if m.rows - start < BLOCK { m.rows - start } else { BLOCK }
+  let idx = Buf::new(2 * block)
+  for start = 0; start < m.rows; start = start + block {
+    let n = if m.rows - start < block { m.rows - start } else { block }
     margin.fill(self.base_margin)
     if self.fast is Some(fast) {
       for r in 0..<n {

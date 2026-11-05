@@ -13,7 +13,7 @@ const USAGE : String =
   #|  --leaf    leaf index reached in every tree
   #|
   #|bench times batch prediction and prints rows per second and the
-  #|average latency per row.
+  #|average latency per row, then the latency of one row at a time.
   #|
   #|Models are XGBoost JSON files (Booster.save_model("model.json")).
   #|Empty cells, NA and NaN in the CSV are treated as missing.
@@ -122,6 +122,15 @@ fn bench(args : ArrayView[String]) -> Unit raise {
   println("rows:       \{data.rows} x \{repeat}")
   println("throughput: \{(rows / ms * 1000.0).to_int64()} rows/s")
   println("latency:    \{ms * 1000.0 / rows} us/row")
+  // one row at a time, as an online caller would
+  let t4 = @env.now()
+  for r in 0..<data.rows {
+    check = check + model.predict(data.row(r))[0]
+  }
+  let t5 = @env.now()
+  println(
+    "single:     \{(t5 - t4).to_double() * 1000.0 / data.rows.to_double()} us/row",
+  )
   println("checksum:   \{check}")
 }
 

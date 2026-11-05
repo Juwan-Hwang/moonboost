@@ -19,7 +19,7 @@ fn Nodes::set(self : Nodes, id : Int32, left : Int32, word : Int32) -> Unit {
 fn Nodes::step(self : Nodes, i : Int32, ranks : Buf, base : Int32) -> Int32 {
   let node = self.0.unsafe_get(i)
   let w = node.to_int()
-  let go = if ranks.get(base + (w >> 16)) >= (w & 0xFFFF) { 1 } else { 0 }
+  let go = if ranks.get(base + (w >> 16)) > (w & 0xFFFF) { 1 } else { 0 }
   (node >> 32).to_int() + go
 }
 
@@ -84,3 +84,8 @@ const USE_HEAP : Bool = false
 ///|
 /// Largest heap, in slots, per node of the compact forest.
 const HEAP_FACTOR : Int32 = 32
+
+///|
+/// Whether one-row predictions walk four trees depth-first (needs `step` to
+/// be inlined, which the wasm engines do not do).
+const SINGLE_WALK : Bool = true

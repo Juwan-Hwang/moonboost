@@ -16,8 +16,9 @@ const LEAF_THR : Int32 = 0xFFFF
 /// - **Ranks instead of floats.** For each feature, the distinct split
 ///   thresholds used anywhere in the model are sorted once. A row value is
 ///   replaced by its rank, the number of thresholds `<=` it, and a split on
-///   the `k`-th threshold becomes `rank >= k + 1`. This is exact: `x < t_k`
-///   holds exactly when fewer than `k + 1` thresholds are `<= x`.
+///   the `k`-th threshold (counting from 0) goes right when `rank > k`. This
+///   is exact: `x < t_k` holds exactly when at most `k` thresholds are
+///   `<= x`. Storing `k` rather than `k + 1` saves a subtraction per step.
 /// - **Missing values folded into the feature index.** Each feature gets two
 ///   rank slots: slot `2f` holds 0 for a missing value and slot `2f + 1`
 ///   holds `RANK_HIGH`. A split that sends missing values left reads slot
@@ -135,7 +136,7 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
         cut_start[f + 1],
         float_key(t.value[old]),
       )
-      word_of[old] = (slot << 16) | (k - cut_start[f] + 1)
+      word_of[old] = (slot << 16) | (k - cut_start[f])
       nodes.set(id, next, word_of[old])
       queue.push((t.left[old], next, d + 1))
       queue.push((t.right[old], next + 1, d + 1))
@@ -167,9 +168,9 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
           stack.push((t.left[old], 2 * h, d + 1))
           stack.push((t.right[old], 2 * h + 1, d + 1))
         } else if d < d_all {
-          // a shallow leaf: slot 0, threshold 0 always goes right
-          heap.set(b + h, 0)
-          stack.push((old, 2 * h + 1, d + 1))
+          // a shallow leaf: the leaf threshold always goes left
+          heap.set(b + h, LEAF_THR)
+          stack.push((old, 2 * h, d + 1))
         } else {
           heap_leaf.set(b + h - heap_size, t.value[old])
         }
@@ -281,6 +282,51 @@ fn Lockstep::accumulate(
   let nodes = self.nodes
   let leaf_value = self.leaf_value
   let trees = self.roots.length()
+  if SINGLE_WALK && n == 1 {
+    // one row: four trees walk to their leaves side by side, with no `idx`
+    // traffic; a tree shallower than the deepest of the four idles on its
+    // self-looping leaf
+    let roots = self.roots
+    let depth = self.depth
+    let mut t = 0
+    while t + 3 < trees {
+      let mut x0 = roots[t]
+      let mut x1 = roots[t + 1]
+      let mut x2 = roots[t + 2]
+      let mut x3 = roots[t + 3]
+      let mut d = depth[t]
+      for q in 1..<4 {
+        if depth[t + q] > d {
+          d = depth[t + q]
+        }
+      }
+      for _ in 0..<d {
+        x0 = nodes.step(x0, ranks, 0)
+        x1 = nodes.step(x1, ranks, 0)
+        x2 = nodes.step(x2, ranks, 0)
+        x3 = nodes.step(x3, ranks, 0)
+      }
+      let g = tree_group[t]
+      margin[g] = margin[g] + leaf_value[x0]
+      let g = tree_group[t + 1]
+      margin[g] = margin[g] + leaf_value[x1]
+      let g = tree_group[t + 2]
+      margin[g] = margin[g] + leaf_value[x2]
+      let g = tree_group[t + 3]
+      margin[g] = margin[g] + leaf_value[x3]
+      t += 4
+    }
+    while t < trees {
+      let mut x = roots[t]
+      for _ in 0..<depth[t] {
+        x = nodes.step(x, ranks, 0)
+      }
+      let g = tree_group[t]
+      margin[g] = margin[g] + leaf_value[x]
+      t += 1
+    }
+    return
+  }
   for t = 0; t < trees; {
     let root = self.roots[t]
     let d = self.depth[t]
@@ -343,6 +389,73 @@ fn Lockstep::accumulate_heap(
   let d = self.heap_depth
   let size = self.heap_size
   let trees = self.roots.length()
+  if SINGLE_WALK && n == 1 {
+    // one row: walk each tree to its leaf in turn, four trees at a time so
+    // their loads overlap; no `idx` traffic
+    let rb = 0
+    let mut t = 0
+    while t + 3 < trees {
+      let b0 = t * size
+      let b1 = b0 + size
+      let b2 = b1 + size
+      let b3 = b2 + size
+      let mut x0 = 1
+      let mut x1 = 1
+      let mut x2 = 1
+      let mut x3 = 1
+      for _ in 0..<d {
+        x0 = {
+          let w = heap.get(b0 + x0)
+          (x0 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x1 = {
+          let w = heap.get(b1 + x1)
+          (x1 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x2 = {
+          let w = heap.get(b2 + x2)
+          (x2 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x3 = {
+          let w = heap.get(b3 + x3)
+          (x3 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+      }
+      let g = tree_group[t]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b0 + x0 - size))
+      let g = tree_group[t + 1]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b1 + x1 - size))
+      let g = tree_group[t + 2]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b2 + x2 - size))
+      let g = tree_group[t + 3]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b3 + x3 - size))
+      t += 4
+    }
+    while t < trees {
+      let b0 = t * size
+      let mut x0 = 1
+      for _ in 0..<d {
+        x0 = {
+          let w = heap.get(b0 + x0)
+          (x0 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+      }
+      let g = tree_group[t]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b0 + x0 - size))
+      t += 1
+    }
+    return
+  }
   for t = 0; t < trees; {
     let ba = t * size
     let ga = tree_group[t]
@@ -357,7 +470,7 @@ fn Lockstep::accumulate_heap(
             let i = 1
             let w = heap.get(ba + i)
             (i << 1) |
-            (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+            (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
             31).reinterpret_as_int()
           },
         )
@@ -367,7 +480,7 @@ fn Lockstep::accumulate_heap(
             let i = 1
             let w = heap.get(bb + i)
             (i << 1) |
-            (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+            (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
             31).reinterpret_as_int()
           },
         )
@@ -381,7 +494,7 @@ fn Lockstep::accumulate_heap(
               let i = idx.get(r)
               let w = heap.get(ba + i)
               (i << 1) |
-              (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+              (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
               31).reinterpret_as_int()
             },
           )
@@ -391,7 +504,7 @@ fn Lockstep::accumulate_heap(
               let i = idx.get(n + r)
               let w = heap.get(bb + i)
               (i << 1) |
-              (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+              (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
               31).reinterpret_as_int()
             },
           )
@@ -403,14 +516,14 @@ fn Lockstep::accumulate_heap(
           let i = idx.get(r)
           let w = heap.get(ba + i)
           (i << 1) |
-          (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
           31).reinterpret_as_int()
         }
         let lb = {
           let i = idx.get(n + r)
           let w = heap.get(bb + i)
           (i << 1) |
-          (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
           31).reinterpret_as_int()
         }
         let k = r * groups + ga
@@ -428,7 +541,7 @@ fn Lockstep::accumulate_heap(
           let i = 1
           let w = heap.get(ba + i)
           (i << 1) |
-          (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
           31).reinterpret_as_int()
         },
       )
@@ -442,7 +555,7 @@ fn Lockstep::accumulate_heap(
             let i = idx.get(r)
             let w = heap.get(ba + i)
             (i << 1) |
-            (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+            (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
             31).reinterpret_as_int()
           },
         )
@@ -454,8 +567,7 @@ fn Lockstep::accumulate_heap(
         let i = idx.get(r)
         let w = heap.get(ba + i)
         (i << 1) |
-        (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
-        31).reinterpret_as_int()
+        (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >> 31).reinterpret_as_int()
       }
       let k = r * groups + ga
       margin.unsafe_set(k, margin.unsafe_get(k) + leaf.get(ba + la - size))

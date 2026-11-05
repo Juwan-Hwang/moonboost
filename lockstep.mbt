@@ -282,49 +282,8 @@ fn Lockstep::accumulate(
   let nodes = self.nodes
   let leaf_value = self.leaf_value
   let trees = self.roots.length()
-  if SINGLE_WALK && n == 1 {
-    // one row: four trees walk to their leaves side by side, with no `idx`
-    // traffic; a tree shallower than the deepest of the four idles on its
-    // self-looping leaf
-    let roots = self.roots
-    let depth = self.depth
-    let mut t = 0
-    while t + 3 < trees {
-      let mut x0 = roots[t]
-      let mut x1 = roots[t + 1]
-      let mut x2 = roots[t + 2]
-      let mut x3 = roots[t + 3]
-      let mut d = depth[t]
-      for q in 1..<4 {
-        if depth[t + q] > d {
-          d = depth[t + q]
-        }
-      }
-      for _ in 0..<d {
-        x0 = nodes.step(x0, ranks, 0)
-        x1 = nodes.step(x1, ranks, 0)
-        x2 = nodes.step(x2, ranks, 0)
-        x3 = nodes.step(x3, ranks, 0)
-      }
-      let g = tree_group[t]
-      margin[g] = margin[g] + leaf_value[x0]
-      let g = tree_group[t + 1]
-      margin[g] = margin[g] + leaf_value[x1]
-      let g = tree_group[t + 2]
-      margin[g] = margin[g] + leaf_value[x2]
-      let g = tree_group[t + 3]
-      margin[g] = margin[g] + leaf_value[x3]
-      t += 4
-    }
-    while t < trees {
-      let mut x = roots[t]
-      for _ in 0..<depth[t] {
-        x = nodes.step(x, ranks, 0)
-      }
-      let g = tree_group[t]
-      margin[g] = margin[g] + leaf_value[x]
-      t += 1
-    }
+  if n == 1 {
+    nodes.single(self.roots, self.depth, tree_group, ranks, leaf_value, margin)
     return
   }
   for t = 0; t < trees; {
@@ -389,19 +348,183 @@ fn Lockstep::accumulate_heap(
   let d = self.heap_depth
   let size = self.heap_size
   let trees = self.roots.length()
-  if SINGLE_WALK && n == 1 {
-    // one row: walk each tree to its leaf in turn, four trees at a time so
-    // their loads overlap; no `idx` traffic
+  if n == 1 {
+    // one row: walk trees to their leaves side by side, no `idx` traffic
     let rb = 0
     let mut t = 0
-    while t + 3 < trees {
-      let b0 = t * size
-      let b1 = b0 + size
-      let b2 = b1 + size
-      let b3 = b2 + size
+    while t + 15 < trees {
+      let b0 = (t + 0) * size
       let mut x0 = 1
+      let b1 = (t + 1) * size
       let mut x1 = 1
+      let b2 = (t + 2) * size
       let mut x2 = 1
+      let b3 = (t + 3) * size
+      let mut x3 = 1
+      let b4 = (t + 4) * size
+      let mut x4 = 1
+      let b5 = (t + 5) * size
+      let mut x5 = 1
+      let b6 = (t + 6) * size
+      let mut x6 = 1
+      let b7 = (t + 7) * size
+      let mut x7 = 1
+      let b8 = (t + 8) * size
+      let mut x8 = 1
+      let b9 = (t + 9) * size
+      let mut x9 = 1
+      let b10 = (t + 10) * size
+      let mut x10 = 1
+      let b11 = (t + 11) * size
+      let mut x11 = 1
+      let b12 = (t + 12) * size
+      let mut x12 = 1
+      let b13 = (t + 13) * size
+      let mut x13 = 1
+      let b14 = (t + 14) * size
+      let mut x14 = 1
+      let b15 = (t + 15) * size
+      let mut x15 = 1
+      for _ in 0..<d {
+        x0 = {
+          let w = heap.get(b0 + x0)
+          (x0 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x1 = {
+          let w = heap.get(b1 + x1)
+          (x1 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x2 = {
+          let w = heap.get(b2 + x2)
+          (x2 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x3 = {
+          let w = heap.get(b3 + x3)
+          (x3 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x4 = {
+          let w = heap.get(b4 + x4)
+          (x4 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x5 = {
+          let w = heap.get(b5 + x5)
+          (x5 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x6 = {
+          let w = heap.get(b6 + x6)
+          (x6 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x7 = {
+          let w = heap.get(b7 + x7)
+          (x7 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x8 = {
+          let w = heap.get(b8 + x8)
+          (x8 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x9 = {
+          let w = heap.get(b9 + x9)
+          (x9 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x10 = {
+          let w = heap.get(b10 + x10)
+          (x10 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x11 = {
+          let w = heap.get(b11 + x11)
+          (x11 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x12 = {
+          let w = heap.get(b12 + x12)
+          (x12 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x13 = {
+          let w = heap.get(b13 + x13)
+          (x13 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x14 = {
+          let w = heap.get(b14 + x14)
+          (x14 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        x15 = {
+          let w = heap.get(b15 + x15)
+          (x15 << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+      }
+      let g = tree_group[t + 0]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b0 + x0 - size))
+      let g = tree_group[t + 1]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b1 + x1 - size))
+      let g = tree_group[t + 2]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b2 + x2 - size))
+      let g = tree_group[t + 3]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b3 + x3 - size))
+      let g = tree_group[t + 4]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b4 + x4 - size))
+      let g = tree_group[t + 5]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b5 + x5 - size))
+      let g = tree_group[t + 6]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b6 + x6 - size))
+      let g = tree_group[t + 7]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b7 + x7 - size))
+      let g = tree_group[t + 8]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b8 + x8 - size))
+      let g = tree_group[t + 9]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b9 + x9 - size))
+      let g = tree_group[t + 10]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b10 + x10 - size))
+      let g = tree_group[t + 11]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b11 + x11 - size))
+      let g = tree_group[t + 12]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b12 + x12 - size))
+      let g = tree_group[t + 13]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b13 + x13 - size))
+      let g = tree_group[t + 14]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b14 + x14 - size))
+      let g = tree_group[t + 15]
+      margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b15 + x15 - size))
+      t += 16
+    }
+    while t + 3 < trees {
+      let b0 = (t + 0) * size
+      let mut x0 = 1
+      let b1 = (t + 1) * size
+      let mut x1 = 1
+      let b2 = (t + 2) * size
+      let mut x2 = 1
+      let b3 = (t + 3) * size
       let mut x3 = 1
       for _ in 0..<d {
         x0 = {
@@ -429,7 +552,7 @@ fn Lockstep::accumulate_heap(
           31).reinterpret_as_int()
         }
       }
-      let g = tree_group[t]
+      let g = tree_group[t + 0]
       margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b0 + x0 - size))
       let g = tree_group[t + 1]
       margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b1 + x1 - size))
@@ -439,8 +562,8 @@ fn Lockstep::accumulate_heap(
       margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b3 + x3 - size))
       t += 4
     }
-    while t < trees {
-      let b0 = t * size
+    while t + 0 < trees {
+      let b0 = (t + 0) * size
       let mut x0 = 1
       for _ in 0..<d {
         x0 = {
@@ -450,7 +573,7 @@ fn Lockstep::accumulate_heap(
           31).reinterpret_as_int()
         }
       }
-      let g = tree_group[t]
+      let g = tree_group[t + 0]
       margin.unsafe_set(g, margin.unsafe_get(g) + leaf.get(b0 + x0 - size))
       t += 1
     }

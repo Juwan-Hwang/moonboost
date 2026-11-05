@@ -75,6 +75,58 @@ const USE_HEAP : Bool = true
 const HEAP_FACTOR : Int32 = 32
 
 ///|
-/// Whether one-row predictions walk four trees depth-first (needs `step` to
-/// be inlined, which the wasm engines do not do).
-const SINGLE_WALK : Bool = true
+/// One row: four trees walk to their leaves side by side, with no `idx`
+/// traffic; a tree shallower than the deepest of the four idles on its
+/// self-looping leaf. Leaves are added in tree order.
+fn Nodes::single(
+  self : Nodes,
+  roots : FixedArray[Int32],
+  depth : FixedArray[Int32],
+  tree_group : Array[Int32],
+  ranks : Buf,
+  leaf_value : FixedArray[Float],
+  margin : FixedArray[Float],
+) -> Unit {
+  let nodes = self
+  let trees = roots.length()
+  // one row: four trees walk to their leaves side by side, with no `idx`
+  // traffic; a tree shallower than the deepest of the four idles on its
+  // self-looping leaf
+  let mut t = 0
+  while t + 3 < trees {
+    let mut x0 = roots[t]
+    let mut x1 = roots[t + 1]
+    let mut x2 = roots[t + 2]
+    let mut x3 = roots[t + 3]
+    let mut d = depth[t]
+    for q in 1..<4 {
+      if depth[t + q] > d {
+        d = depth[t + q]
+      }
+    }
+    for _ in 0..<d {
+      x0 = nodes.step(x0, ranks, 0)
+      x1 = nodes.step(x1, ranks, 0)
+      x2 = nodes.step(x2, ranks, 0)
+      x3 = nodes.step(x3, ranks, 0)
+    }
+    let g = tree_group[t]
+    margin[g] = margin[g] + leaf_value[x0]
+    let g = tree_group[t + 1]
+    margin[g] = margin[g] + leaf_value[x1]
+    let g = tree_group[t + 2]
+    margin[g] = margin[g] + leaf_value[x2]
+    let g = tree_group[t + 3]
+    margin[g] = margin[g] + leaf_value[x3]
+    t += 4
+  }
+  while t < trees {
+    let mut x = roots[t]
+    for _ in 0..<depth[t] {
+      x = nodes.step(x, ranks, 0)
+    }
+    let g = tree_group[t]
+    margin[g] = margin[g] + leaf_value[x]
+    t += 1
+  }
+}

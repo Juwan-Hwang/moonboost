@@ -87,20 +87,19 @@ better. XGBoost is timed through its C API (`XGBoosterPredictFromDense`,
 
 | Model | moonboost native | moonboost JS (Node 22) | moonboost wasm / wasm-gc (moonrun) | XGBoost 3.4.1 C API |
 |---|---|---|---|---|
-| 100 trees, depth 4 | 0.46 | 2.3 | 1.27 / 1.4 | 1.00 |
-| 500 trees, depth 8 | 3.22 | 11.8 | 6.6 / 9.1 | 12.5 |
-| 1000 trees, depth 10 | 8.3 | 34.5 | 15.9 / 22.2 | 34.6 |
+| 100 trees, depth 4 | 0.46 | 2.2 | 1.3 / 1.4 | 1.00 |
+| 500 trees, depth 8 | 3.32 | 11.6 | 6.7 / 9.1 | 12.2 |
+| 1000 trees, depth 10 | 8.3 | 33.6 | 15.7 / 22.1 | 33.9 |
 
-One row per call (each of the 10,000 rows predicted on its own, µs per row),
-which is what an online caller pays. For XGBoost this is one
-`XGBoosterPredictFromDense` call per row, so its per-call overhead is
-included.
+One row per call (rows predicted one at a time, µs per row), which is what
+an online caller pays. For XGBoost this is one `XGBoosterPredictFromDense`
+call per row, so its per-call overhead is included.
 
 | Model | moonboost native | moonboost JS (Node 22) | moonboost wasm / wasm-gc (moonrun) | XGBoost 3.4.1 C API |
 |---|---|---|---|---|
-| 100 trees, depth 4 | 0.7 | 4.2 | 2.4 / 2.0 | 12.3 |
-| 500 trees, depth 8 | 6.2 | 13.3 | 17.7 / 20.2 | 91 |
-| 1000 trees, depth 10 | 25 | 113 | 76 / 76 | 394 |
+| 100 trees, depth 4 | 0.8 | 3.3 | 2.3 / 1.8 | 12.3 |
+| 500 trees, depth 8 | 5.3 | 12.1 | 13.1 / 9.3 | 82 |
+| 1000 trees, depth 10 | 15.6 | 64 | 45 / 25 | 302 |
 
 All 30,000 predictions are bit-for-bit identical to XGBoost's. Reproduce with
 `python3 bench/gen_models.py`, then `moonboost bench`, `node
@@ -120,9 +119,9 @@ How the batch path works (`lockstep.mbt`):
   `left + go_right`, and a leaf is its own left child with a threshold no rank
   reaches. Every row takes the same number of steps through a tree, so 64 rows
   walk it in lockstep with no branches.
-- **One row, four trees.** A single-row call walks four trees to their
-  leaves side by side, so their loads overlap, instead of using the block
-  machinery (native and JS; the wasm engines do not inline the step).
+- **One row, many trees.** A single-row call walks sixteen trees to their
+  leaves side by side (four on plain wasm, where more spill), so their
+  cache misses overlap, instead of using the block machinery.
 - **Pointer-free trees on JS.** The JS build pads every tree to the forest's
   depth and stores it as an implicit heap (children of node `h` at `2h` and
   `2h + 1`; a shallow leaf is extended by nodes that always go right), with
@@ -132,7 +131,7 @@ How the batch path works (`lockstep.mbt`):
 
 Leaves are still added in tree order in float32, which is what keeps the
 results identical. Models with categorical splits use the verified kernel.
-The JS bundle minified with esbuild is 143 KB, 46.2 KB gzipped, with no other runtime.
+The JS bundle minified with esbuild is 146 KB, 47.0 KB gzipped, with no other runtime.
 
 ## Usage
 

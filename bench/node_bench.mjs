@@ -26,6 +26,7 @@ for (const name of ["small", "medium", "large"]) {
   const batch = ((performance.now() - t) * 1000) / rows.length;
 
   const n = 2000;
+  for (let i = 0; i < n; i++) mb.predict(model, rows[i % rows.length]); // warm up
   t = performance.now();
   for (let i = 0; i < n; i++) mb.predict(model, rows[i % rows.length]);
   const single = ((performance.now() - t) * 1000) / n;

@@ -231,29 +231,9 @@ fn Lockstep::accumulate(
       let d2 = self.depth[t + 1]
       let g2 = tree_group[t + 1]
       let d = if d2 > d { d2 } else { d }
-      for r in 0..<n {
-        let base = r * width
-        idx.set(r, nodes.step(root, ranks, base))
-        idx.set(n + r, nodes.step(root2, ranks, base))
-      }
-      for _ in 2..<d {
-        for r in 0..<n {
-          // in bounds by construction, as below
-          let base = r * width
-          idx.set(r, nodes.step(idx.get(r), ranks, base))
-          idx.set(n + r, nodes.step(idx.get(n + r), ranks, base))
-        }
-      }
-      for r in 0..<n {
-        // leaves add in tree order: tree `t` first, then `t + 1`
-        let base = r * width
-        let l1 = nodes.step(idx.get(r), ranks, base)
-        let l2 = nodes.step(idx.get(n + r), ranks, base)
-        let k = r * groups + g
-        margin.unsafe_set(k, margin.unsafe_get(k) + leaf_value.unsafe_get(l1))
-        let k = r * groups + g2
-        margin.unsafe_set(k, margin.unsafe_get(k) + leaf_value.unsafe_get(l2))
-      }
+      nodes.walk_pair(
+        root, root2, d, ranks, width, n, idx, leaf_value, margin, groups, g, g2,
+      )
       continue t + 2
     }
     // The first level starts every row at the root, so it writes `idx`

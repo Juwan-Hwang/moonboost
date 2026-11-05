@@ -17,3 +17,22 @@ fn Buf::get(self : Buf, i : Int32) -> Int32 {
 fn Buf::set(self : Buf, i : Int32, v : Int32) -> Unit {
   self.0.unsafe_set(i, v)
 }
+
+///|
+/// Leaf storage, read unchecked.
+priv struct FBuf(FixedArray[Float])
+
+///|
+fn FBuf::new(n : Int32) -> FBuf {
+  FixedArray::make(n, 0.0)
+}
+
+///|
+fn FBuf::get(self : FBuf, i : Int32) -> Float {
+  self.0.unsafe_get(i)
+}
+
+///|
+fn FBuf::set(self : FBuf, i : Int32, v : Float) -> Unit {
+  self.0.unsafe_set(i, v)
+}

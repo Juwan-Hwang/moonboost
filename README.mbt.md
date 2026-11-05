@@ -87,9 +87,9 @@ better. XGBoost is timed through its C API (`XGBoosterPredictFromDense`,
 
 | Model | moonboost native | moonboost JS (Node 22) | moonboost wasm / wasm-gc (moonrun) | XGBoost 3.4.1 C API |
 |---|---|---|---|---|
-| 100 trees, depth 4 | 0.47 | 3.3 | 1.3 / 1.5 | 1.00 |
-| 500 trees, depth 8 | 3.30 | 20.2 | 7.1 / 10.0 | 12.6 |
-| 1000 trees, depth 10 | 8.4 | 44 | 17.1 / 24.2 | 34.2 |
+| 100 trees, depth 4 | 0.48 | 2.4 | 1.3 / 1.4 | 1.00 |
+| 500 trees, depth 8 | 3.54 | 12.5 | 7.0 / 9.7 | 12.5 |
+| 1000 trees, depth 10 | 8.6 | 35.5 | 16.9 / 23.5 | 34.7 |
 
 All 30,000 predictions are bit-for-bit identical to XGBoost's. Reproduce with
 `python3 bench/gen_models.py`, then `moonboost bench`, `node
@@ -109,10 +109,16 @@ How the batch path works (`lockstep.mbt`):
   `left + go_right`, and a leaf is its own left child with a threshold no rank
   reaches. Every row takes the same number of steps through a tree, so 64 rows
   walk it in lockstep with no branches.
+- **Pointer-free trees on JS.** The JS build pads every tree to the forest's
+  depth and stores it as an implicit heap (children of node `h` at `2h` and
+  `2h + 1`; a shallow leaf is extended by nodes that always go right), with
+  split words in an `Int32Array` and leaves in a `Float32Array`. A step then
+  reads no child index, which V8 rewards; native and wasm keep the compact
+  layout, which is faster there.
 
 Leaves are still added in tree order in float32, which is what keeps the
 results identical. Models with categorical splits use the verified kernel.
-The minified JS bundle is 129 KB, 42.9 KB gzipped, with no other runtime.
+The JS bundle minified with esbuild is 140 KB, 45.5 KB gzipped, with no other runtime.
 
 ## Usage
 

@@ -41,6 +41,15 @@ priv struct Lockstep {
   search_start : FixedArray[Int32]
   search_half : FixedArray[Int32]
   num_feature : Int32
+  // Implicit-heap copy of the forest (targets with `USE_HEAP`): every tree
+  // padded to `heap_depth` levels, split node `h` of tree `t` at `t *
+  // heap_size + h` with children `2h` and `2h + 1`, so a step reads no child
+  // pointer; leaf `h` (`h >= heap_size`) at `t * heap_size + h - heap_size`.
+  // `heap_depth` is 0 when the copy is not built.
+  heap : Buf
+  heap_leaf : FBuf
+  heap_depth : Int32
+  heap_size : Int32
 }
 
 ///|
@@ -96,7 +105,10 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
   let depth = FixedArray::make(trees.length(), 0)
   let mut base = 0
   let queue : Array[(Int32, Int32, Int32)] = [] // (old id, new id, depth)
+  let words : Array[Array[Int32]] = [] // per tree, the word of each old id
   for ti, t in trees {
+    let word_of = Array::make(t.num_nodes(), 0)
+    words.push(word_of)
     roots[ti] = base
     // breadth-first renumbering, so the two children of a node are adjacent
     queue.clear()
@@ -123,7 +135,8 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
         cut_start[f + 1],
         float_key(t.value[old]),
       )
-      nodes.set(id, next, (slot << 16) | (k - cut_start[f] + 1))
+      word_of[old] = (slot << 16) | (k - cut_start[f] + 1)
+      nodes.set(id, next, word_of[old])
       queue.push((t.left[old], next, d + 1))
       queue.push((t.right[old], next + 1, d + 1))
       next += 2
@@ -134,9 +147,54 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
   if 2 * num_feature >= 0x8000 {
     return None
   }
+  let d_all = depth.fold(init=0, (a, d) => if d > a { d } else { a })
+  let heap_size = if d_all < 20 { 1 << d_all } else { 0 }
+  let use_heap = USE_HEAP &&
+    d_all >= 2 &&
+    heap_size > 0 &&
+    trees.length().to_int64() * heap_size.to_int64() <=
+    HEAP_FACTOR.to_int64() * total.to_int64()
+  let (heap, heap_leaf, heap_depth) = if use_heap {
+    let heap = Buf::new(trees.length() * heap_size)
+    let heap_leaf = FBuf::new(trees.length() * heap_size)
+    let stack : Array[(Int32, Int32, Int32)] = [] // (old id, heap id, depth)
+    for ti, t in trees {
+      let b = ti * heap_size
+      stack.push((0, 1, 0))
+      while stack.pop() is Some((old, h, d)) {
+        if t.left[old] != -1 {
+          heap.set(b + h, words[ti][old])
+          stack.push((t.left[old], 2 * h, d + 1))
+          stack.push((t.right[old], 2 * h + 1, d + 1))
+        } else if d < d_all {
+          // a shallow leaf: slot 0, threshold 0 always goes right
+          heap.set(b + h, 0)
+          stack.push((old, 2 * h + 1, d + 1))
+        } else {
+          heap_leaf.set(b + h - heap_size, t.value[old])
+        }
+      }
+    }
+    (heap, heap_leaf, d_all)
+  } else {
+    (Buf::new(0), FBuf::new(0), 0)
+  }
   Some({
-    nodes,
-    leaf_value,
+    heap,
+    heap_leaf,
+    heap_depth,
+    heap_size,
+    // the heap copy replaces the compact one, so drop it
+    nodes: if heap_depth > 0 {
+      Nodes::make(0)
+    } else {
+      nodes
+    },
+    leaf_value: if heap_depth > 0 {
+      []
+    } else {
+      leaf_value
+    },
     roots,
     depth,
     search,
@@ -215,6 +273,10 @@ fn Lockstep::accumulate(
   idx : Buf,
   margin : FixedArray[Float],
 ) -> Unit {
+  if self.heap_depth > 0 {
+    self.accumulate_heap(tree_group, groups, ranks, n, idx, margin)
+    return
+  }
   let width = 2 * self.num_feature
   let nodes = self.nodes
   let leaf_value = self.leaf_value
@@ -259,6 +321,144 @@ fn Lockstep::accumulate(
       let leaf = if d >= 1 { nodes.step(i, ranks, r * width) } else { root }
       let k = r * groups + g
       margin.unsafe_set(k, margin.unsafe_get(k) + leaf_value.unsafe_get(leaf))
+    }
+    continue t + 1
+  }
+}
+
+///|
+/// `accumulate` over the implicit-heap copy, two trees per pass.
+fn Lockstep::accumulate_heap(
+  self : Lockstep,
+  tree_group : Array[Int32],
+  groups : Int32,
+  ranks : Buf,
+  n : Int32,
+  idx : Buf,
+  margin : FixedArray[Float],
+) -> Unit {
+  let width = 2 * self.num_feature
+  let heap = self.heap
+  let leaf = self.heap_leaf
+  let d = self.heap_depth
+  let size = self.heap_size
+  let trees = self.roots.length()
+  for t = 0; t < trees; {
+    let ba = t * size
+    let ga = tree_group[t]
+    if t + 1 < trees {
+      let bb = ba + size
+      let gb = tree_group[t + 1]
+      for r in 0..<n {
+        let rb = r * width
+        idx.set(
+          r,
+          {
+            let i = 1
+            let w = heap.get(ba + i)
+            (i << 1) |
+            (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+            31).reinterpret_as_int()
+          },
+        )
+        idx.set(
+          n + r,
+          {
+            let i = 1
+            let w = heap.get(bb + i)
+            (i << 1) |
+            (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+            31).reinterpret_as_int()
+          },
+        )
+      }
+      for _ in 2..<d {
+        for r in 0..<n {
+          let rb = r * width
+          idx.set(
+            r,
+            {
+              let i = idx.get(r)
+              let w = heap.get(ba + i)
+              (i << 1) |
+              (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            },
+          )
+          idx.set(
+            n + r,
+            {
+              let i = idx.get(n + r)
+              let w = heap.get(bb + i)
+              (i << 1) |
+              (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            },
+          )
+        }
+      }
+      for r in 0..<n {
+        let rb = r * width
+        let la = {
+          let i = idx.get(r)
+          let w = heap.get(ba + i)
+          (i << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        let lb = {
+          let i = idx.get(n + r)
+          let w = heap.get(bb + i)
+          (i << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        }
+        let k = r * groups + ga
+        margin.unsafe_set(k, margin.unsafe_get(k) + leaf.get(ba + la - size))
+        let k = r * groups + gb
+        margin.unsafe_set(k, margin.unsafe_get(k) + leaf.get(bb + lb - size))
+      }
+      continue t + 2
+    }
+    for r in 0..<n {
+      let rb = r * width
+      idx.set(
+        r,
+        {
+          let i = 1
+          let w = heap.get(ba + i)
+          (i << 1) |
+          (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+          31).reinterpret_as_int()
+        },
+      )
+    }
+    for _ in 2..<d {
+      for r in 0..<n {
+        let rb = r * width
+        idx.set(
+          r,
+          {
+            let i = idx.get(r)
+            let w = heap.get(ba + i)
+            (i << 1) |
+            (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+            31).reinterpret_as_int()
+          },
+        )
+      }
+    }
+    for r in 0..<n {
+      let rb = r * width
+      let la = {
+        let i = idx.get(r)
+        let w = heap.get(ba + i)
+        (i << 1) |
+        (((w & 0xFFFF) - ranks.get(rb + (w >> 16)) - 1).reinterpret_as_uint() >>
+        31).reinterpret_as_int()
+      }
+      let k = r * groups + ga
+      margin.unsafe_set(k, margin.unsafe_get(k) + leaf.get(ba + la - size))
     }
     continue t + 1
   }

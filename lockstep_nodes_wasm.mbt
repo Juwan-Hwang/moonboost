@@ -122,3 +122,11 @@ fn Nodes::walk_pair(
     margin.unsafe_set(k, margin.unsafe_get(k) + leaf_value.unsafe_get(l2))
   }
 }
+
+///|
+/// Whether to build and walk the implicit-heap copy of the forest.
+const USE_HEAP : Bool = false
+
+///|
+/// Largest heap, in slots, per node of the compact forest.
+const HEAP_FACTOR : Int32 = 32

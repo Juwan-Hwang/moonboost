@@ -19,7 +19,8 @@ fn Nodes::set(self : Nodes, id : Int32, left : Int32, word : Int32) -> Unit {
 /// Callers guarantee every index is in bounds.
 fn Nodes::step(self : Nodes, i : Int32, ranks : Buf, base : Int32) -> Int32 {
   let w = self.0.get(2 * i + 1)
-  let go = if ranks.get(base + (w >> 16)) >= (w & 0xFFFF) { 1 } else { 0 }
+  let go = (((w & 0xFFFF) - ranks.get(base + (w >> 16)) - 1).reinterpret_as_uint() >>
+  31).reinterpret_as_int()
   self.0.get(2 * i) + go
 }
 

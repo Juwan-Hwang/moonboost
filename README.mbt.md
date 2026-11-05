@@ -85,11 +85,11 @@ an aarch64 Linux VM (Neoverse-V2). µs per row, best of five runs, lower is
 better. XGBoost is timed through its C API (`XGBoosterPredictFromDense`,
 `nthread=1`), so no Python is in its loop.
 
-| Model | moonboost native | moonboost JS (Node 22) | XGBoost 3.4.1 C API |
-|---|---|---|---|
-| 100 trees, depth 4 | 0.47 | 4.8 | 1.00 |
-| 500 trees, depth 8 | 3.30 | 35.2 | 10.59 |
-| 1000 trees, depth 10 | 7.5 | 78.2 | 32.87 |
+| Model | moonboost native | moonboost JS (Node 22) | moonboost wasm / wasm-gc (moonrun) | XGBoost 3.4.1 C API |
+|---|---|---|---|---|
+| 100 trees, depth 4 | 0.47 | 3.3 | 1.3 / 1.5 | 1.00 |
+| 500 trees, depth 8 | 3.30 | 20.2 | 7.1 / 10.0 | 12.6 |
+| 1000 trees, depth 10 | 8.4 | 44 | 17.1 / 24.2 | 34.2 |
 
 All 30,000 predictions are bit-for-bit identical to XGBoost's. Reproduce with
 `python3 bench/gen_models.py`, then `moonboost bench`, `node

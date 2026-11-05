@@ -12,7 +12,10 @@ import {
 
 options(
   targets: {
-    "lockstep_nodes_int64.mbt": [ "not", "js" ],
+    "lockstep_nodes_int64.mbt": [ "not", "js", "wasm", "wasm-gc" ],
+    "lockstep_nodes_wasm.mbt": [ "wasm", "wasm-gc" ],
+    "lockstep_cmp_native.mbt": [ "native" ],
+    "lockstep_cmp_branchfree.mbt": [ "js", "wasm", "wasm-gc" ],
     "lockstep_nodes_js.mbt": [ "js" ],
     "lockstep_buf.mbt": [ "not", "js" ],
     "lockstep_buf_js.mbt": [ "js" ],

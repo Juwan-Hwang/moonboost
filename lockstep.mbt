@@ -193,7 +193,7 @@ fn Lockstep::ranks(
       let mut step = self.search_half[f]
       while step > 0 {
         // in bounds: b + step - 1 < lo + 2 * half - 1, the padded length
-        b = b + (if s.unsafe_get(b + step - 1) <= key { step } else { 0 })
+        b = b + advance(s.unsafe_get(b + step - 1), key, step)
         step = step / 2
       }
       let r = b - lo

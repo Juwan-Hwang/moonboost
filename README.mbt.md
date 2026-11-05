@@ -101,6 +101,11 @@ call per row, so its per-call overhead is included.
 | 500 trees, depth 8 | 5.3 | 12.1 | 13.1 / 9.3 | 82 |
 | 1000 trees, depth 10 | 15.6 | 64 | 45 / 25 | 302 |
 
+Loading the 1000-tree model (a 19 MB JSON file) takes 325 ms native and
+360 ms in Node, where the JS build parses with the engine's own
+`JSON.parse`; XGBoost's `Booster.load_model` takes about 580 ms on the same
+file.
+
 All 30,000 predictions are bit-for-bit identical to XGBoost's. Reproduce with
 `python3 bench/gen_models.py`, then `moonboost bench`, `node
 bench/node_bench.mjs`, and `bench/xgb_capi_bench.c` (build line at its top).

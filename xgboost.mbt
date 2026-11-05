@@ -1,47 +1,7 @@
 ///|
-fn field(obj : Map[String, Json], key : String) -> Json raise ModelError {
-  match obj.get(key) {
-    Some(v) => v
-    None => raise InvalidModel("missing field `\{key}`")
-  }
-}
-
-///|
-fn as_object(j : Json, what : String) -> Map[String, Json] raise ModelError {
-  match j {
-    Object(m) => m
-    _ => raise InvalidModel("`\{what}` should be an object")
-  }
-}
-
-///|
-fn as_array(j : Json, what : String) -> Array[Json] raise ModelError {
-  match j {
-    Array(a) => a
-    _ => raise InvalidModel("`\{what}` should be an array")
-  }
-}
-
-///|
-fn as_string(j : Json, what : String) -> String raise ModelError {
-  match j {
-    String(s) => s
-    _ => raise InvalidModel("`\{what}` should be a string")
-  }
-}
-
-///|
-fn as_number(j : Json, what : String) -> Double raise ModelError {
-  match j {
-    Number(d, ..) => d
-    _ => raise InvalidModel("`\{what}` should be a number")
-  }
-}
-
-///|
 /// XGBoost stores most scalar parameters as strings, e.g. `"num_class": "3"`.
-fn param_int(obj : Map[String, Json], key : String) -> Int32 raise ModelError {
-  let s = as_string(field(obj, key), key)
+fn param_int(obj : Src, key : String) -> Int32 raise ModelError {
+  let s = obj.field(key).string(key)
   @string.parse_int(s) catch {
     _ => raise InvalidModel("`\{key}` is not an integer: \{s}")
   }
@@ -62,26 +22,15 @@ fn parse_base_score(s : String) -> Float raise ModelError {
 }
 
 ///|
-fn int_array(j : Json, what : String) -> Array[Int32] raise ModelError {
-  as_array(j, what).map(v => as_number(v, what).to_int())
-}
-
-///|
-fn float_array(j : Json, what : String) -> Array[Float] raise ModelError {
-  as_array(j, what).map(v => Float::from_double(as_number(v, what)))
-}
-
-///|
-fn parse_tree(j : Json) -> Tree raise ModelError {
-  let t = as_object(j, "tree")
-  let left = int_array(field(t, "left_children"), "left_children")
-  let split_type = int_array(field(t, "split_type"), "split_type")
+fn parse_tree(t : Src) -> Tree raise ModelError {
+  let left = t.field("left_children").ints("left_children")
+  let split_type = t.field("split_type").ints("split_type")
   let categories : Array[Array[Int32]?] = Array::make(left.length(), None)
   if split_type.iter().any(k => k != 0) {
-    let cats = int_array(field(t, "categories"), "categories")
-    let nodes = int_array(field(t, "categories_nodes"), "categories_nodes")
-    let segs = int_array(field(t, "categories_segments"), "categories_segments")
-    let sizes = int_array(field(t, "categories_sizes"), "categories_sizes")
+    let cats = t.field("categories").ints("categories")
+    let nodes = t.field("categories_nodes").ints("categories_nodes")
+    let segs = t.field("categories_segments").ints("categories_segments")
+    let sizes = t.field("categories_sizes").ints("categories_sizes")
     if nodes.length() != segs.length() || nodes.length() != sizes.length() {
       raise InvalidModel("categorical split arrays have inconsistent lengths")
     }
@@ -101,12 +50,10 @@ fn parse_tree(j : Json) -> Tree raise ModelError {
   }
   Tree::new(
     left~,
-    right=int_array(field(t, "right_children"), "right_children"),
-    feature=int_array(field(t, "split_indices"), "split_indices"),
-    value=float_array(field(t, "split_conditions"), "split_conditions"),
-    default_left=int_array(field(t, "default_left"), "default_left").map(x => {
-      x != 0
-    }),
+    right=t.field("right_children").ints("right_children"),
+    feature=t.field("split_indices").ints("split_indices"),
+    value=t.field("split_conditions").floats("split_conditions"),
+    default_left=t.field("default_left").ints("default_left").map(x => x != 0),
     categories~,
   )
 }
@@ -118,36 +65,35 @@ fn parse_tree(j : Json) -> Tree raise ModelError {
 /// Categorical features are passed as their integer codes. Raises
 /// `Unsupported` for `gblinear` and `dart`.
 pub fn Model::from_xgboost_json(text : StringView) -> Model raise ModelError {
-  let root = @json.parse(text) catch {
-    e => raise InvalidModel("invalid JSON: \{e}")
-  }
-  let learner = as_object(field(as_object(root, "root"), "learner"), "learner")
-  let lmp = as_object(
-    field(learner, "learner_model_param"),
-    "learner_model_param",
-  )
+  let root = Src::parse(text)
+  let learner = root.field("learner")
+  let lmp = learner.field("learner_model_param")
   let num_feature = param_int(lmp, "num_feature")
   let num_class = param_int(lmp, "num_class")
   let base_score = parse_base_score(
-    as_string(field(lmp, "base_score"), "base_score"),
+    lmp.field("base_score").string("base_score"),
   )
-  let obj = as_object(field(learner, "objective"), "objective")
   let objective = Objective::from_name(
-    as_string(field(obj, "name"), "objective.name"),
+    learner.field("objective").field("name").string("objective.name"),
     num_class~,
   )
-  let gb = as_object(field(learner, "gradient_booster"), "gradient_booster")
-  let booster = as_string(field(gb, "name"), "gradient_booster.name")
+  let gb = learner.field("gradient_booster")
+  let booster = gb.field("name").string("gradient_booster.name")
   if booster != "gbtree" {
     raise Unsupported("booster \{booster}")
   }
-  let model = as_object(field(gb, "model"), "model")
-  let trees = as_array(field(model, "trees"), "trees").map(parse_tree)
-  let tree_group = int_array(field(model, "tree_info"), "tree_info")
-  let feature_names = match learner.get("feature_names") {
-    Some(Array(a)) => a.map(v => as_string(v, "feature_names"))
-    _ => []
+  let model = gb.field("model")
+  let trees = model.field("trees").items("trees").map(parse_tree)
+  let tree_group = model.field("tree_info").ints("tree_info")
+  // optional; anything but an array of strings is ignored as before
+  let names = if learner.has("feature_names") {
+    learner.field("feature_names").items("feature_names") catch {
+      _ => []
+    }
+  } else {
+    []
   }
+  let feature_names = names.map(v => v.string("feature_names"))
   Model::new(
     trees~,
     tree_group~,

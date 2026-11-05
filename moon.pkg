@@ -21,5 +21,7 @@ options(
     "lockstep_nodes_js.mbt": [ "js" ],
     "lockstep_buf.mbt": [ "not", "js" ],
     "lockstep_buf_js.mbt": [ "js" ],
+    "xgboost_src.mbt": [ "not", "js" ],
+    "xgboost_src_js.mbt": [ "js" ],
   },
 )

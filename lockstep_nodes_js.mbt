@@ -130,3 +130,12 @@ fn Nodes::single(
     t += 1
   }
 }
+
+///|
+/// Whether a large compact forest takes bigger batch blocks.
+const STREAM_BLOCK : Bool = false
+
+///|
+/// Whether ranks come from bucket tables (see `Lockstep::bucket_lo`) rather
+/// than a binary search.
+const USE_BUCKETS : Bool = true

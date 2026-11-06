@@ -114,9 +114,7 @@ pub fn Model::predict_batch(self : Model, m : DenseMatrix) -> Array[Float] {
     let n = if m.rows - start < block { m.rows - start } else { block }
     margin.fill(self.base_margin)
     if self.fast is Some(fast) {
-      for r in 0..<n {
-        fast.ranks(m.row(start + r), ranks, r * 2 * fast.num_feature)
-      }
+      fast.ranks_block(m.data, m.cols, start, n, ranks)
       fast.accumulate(self.tree_group, groups, ranks, n, idx, margin)
     } else {
       for r in 0..<n {

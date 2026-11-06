@@ -81,15 +81,15 @@ proof; that is covered by the differential tests against XGBoost.
 ## Performance
 
 Batch prediction, 10,000 rows of 32 features (5% missing), single thread, on
-an aarch64 Linux VM (Neoverse-V2). µs per row, best of five runs, lower is
+an aarch64 Linux VM (Neoverse-V2). µs per row, best of several runs, lower is
 better. XGBoost is timed through its C API (`XGBoosterPredictFromDense`,
 `nthread=1`), so no Python is in its loop.
 
 | Model | moonboost native | moonboost JS (Node 22) | moonboost wasm / wasm-gc (moonrun) | XGBoost 3.4.1 C API |
 |---|---|---|---|---|
-| 100 trees, depth 4 | 0.46 | 2.7 | 1.3 / 1.4 | 1.00 |
-| 500 trees, depth 8 | 3.30 | 12.4 | 6.7 / 9.2 | 12.3 |
-| 1000 trees, depth 10 | 8.5 | 28.4 | 15.8 / 22.2 | 34.1 |
+| 100 trees, depth 4 | 0.46 | 2.5 | 0.9 / 1.1 | 1.00 |
+| 500 trees, depth 8 | 3.32 | 11.7 | 6.2 / 8.5 | 12.9 |
+| 1000 trees, depth 10 | 8.9 | 28.4 | 15.5 / 21.7 | 35.0 |
 
 One row per call (rows predicted one at a time, µs per row), which is what
 an online caller pays. For XGBoost this is one `XGBoosterPredictFromDense`
@@ -97,9 +97,9 @@ call per row, so its per-call overhead is included.
 
 | Model | moonboost native | moonboost JS (Node 22) | moonboost wasm / wasm-gc (moonrun) | XGBoost 3.4.1 C API |
 |---|---|---|---|---|
-| 100 trees, depth 4 | 0.7 | 3.5 | 2.3 / 1.8 | 12.4 |
-| 500 trees, depth 8 | 5.2 | 12.4 | 13.6 / 9.9 | 85 |
-| 1000 trees, depth 10 | 17.2 | 70 | 43 / 27 | 361 |
+| 100 trees, depth 4 | 0.8 | 3.6 | 2.5 / 1.9 | 12.5 |
+| 500 trees, depth 8 | 5.4 | 13.3 | 14.6 / 9.8 | 106 |
+| 1000 trees, depth 10 | 18.9 | 72 | 52 / 26 | 439 |
 
 Loading the 1000-tree model (a 19 MB JSON file) takes 325 ms native and
 360 ms in Node, where the JS build parses with the engine's own
@@ -117,6 +117,12 @@ How the batch path works (`lockstep.mbt`):
   branch-free search, and a split on the `k`-th threshold (from 0) goes
   right when `rank > k`. Exact, because `x < t_k` holds exactly when at most
   `k` thresholds are `<= x`.
+- **Rank tables (JS and wasm).** Each feature's thresholds are bucketed by
+  value, `b = floor((x - lo) * scale)`. That map is monotone in `x`, so every
+  threshold in an earlier bucket is `<= x` and every one in a later bucket is
+  `> x`; a rank is one table lookup plus at most a few compares inside the
+  bucket. Features whose thresholds crowd into one bucket keep the search.
+  Ranks are computed one feature at a time across a block of rows.
 - **Missing values cost nothing.** Each feature has two rank slots, one
   holding 0 and one holding a value above every threshold when the input is
   missing. A split reads whichever slot matches its default direction.

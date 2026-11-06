@@ -41,6 +41,23 @@ priv struct Lockstep {
   search : FixedArray[Int32]
   search_start : FixedArray[Int32]
   search_half : FixedArray[Int32]
+  // Bucket table over each feature's threshold values: bucket
+  // `b = clamp(floor((x - lo) * scale), 0, top)` is a monotone function of
+  // `x`, so every threshold in an earlier bucket is `<= x` and every one in a
+  // later bucket is `> x`. `table[table_start + b]` counts the thresholds in
+  // earlier buckets, and at most `scan` thresholds share a bucket, so a rank
+  // is one lookup and `scan` compares. `scan` is -1 for a feature whose
+  // thresholds crowd into few buckets; it keeps the binary search.
+  bucket_lo : FixedArray[Double]
+  bucket_scale : FixedArray[Double]
+  bucket_top : FixedArray[Int32]
+  bucket_scan : FixedArray[Int32]
+  table_start : FixedArray[Int32]
+  table : FixedArray[Int32]
+  // threshold values of each feature followed by `scan` NaNs (never `<=`), at
+  // `bcut_start`
+  bcut : FixedArray[Double]
+  bcut_start : FixedArray[Int32]
   num_feature : Int32
   // Implicit-heap copy of the forest (targets with `USE_HEAP`): every tree
   // padded to `heap_depth` levels, split node `h` of tree `t` at `t *
@@ -101,6 +118,60 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
     }
   }
   let search = FixedArray::from_array(search)
+  let bucket_lo = FixedArray::make(num_feature, 0.0)
+  let bucket_scale = FixedArray::make(num_feature, 0.0)
+  let bucket_top = FixedArray::make(num_feature, 0)
+  let bucket_scan = FixedArray::make(num_feature, 0)
+  let table_start = FixedArray::make(num_feature, 0)
+  let table : Array[Int32] = []
+  let bcut_start = FixedArray::make(num_feature, 0)
+  let bcut : Array[Double] = []
+  for f in 0..<num_feature {
+    let c = if USE_BUCKETS { cut_start[f + 1] - cut_start[f] } else { 0 }
+    let cut_end = cut_start[f] + c
+    let mut nb = 1
+    while nb < 4 * c && nb < MAX_BUCKETS {
+      nb *= 2
+    }
+    if c > 0 {
+      let lo = key_value(cuts[cut_start[f]]).to_double()
+      let hi = key_value(cuts[cut_start[f + 1] - 1]).to_double()
+      bucket_lo[f] = lo
+      bucket_scale[f] = if hi > lo {
+        (nb - 1).to_double() / (hi - lo)
+      } else {
+        0.0
+      }
+    }
+    bucket_top[f] = nb - 1
+    let count = FixedArray::make(nb, 0)
+    for i in cut_start[f]..<cut_end {
+      let b = bucket_of(
+        key_value(cuts[i]).to_double(),
+        bucket_lo[f],
+        bucket_scale[f],
+        nb - 1,
+      )
+      count[b] += 1
+    }
+    let occ = count.fold(init=0, (a, n) => if n > a { n } else { a })
+    bucket_scan[f] = if !USE_BUCKETS || occ > MAX_SCAN { -1 } else { occ }
+    table_start[f] = table.length()
+    let mut before = 0
+    for b in 0..<nb {
+      table.push(before)
+      before += count[b]
+    }
+    bcut_start[f] = bcut.length()
+    for i in cut_start[f]..<cut_end {
+      bcut.push(key_value(cuts[i]).to_double())
+    }
+    for _ in 0..<occ {
+      bcut.push(0.0 / 0.0)
+    }
+  }
+  let table = FixedArray::from_array(table)
+  let bcut = FixedArray::from_array(bcut)
   let total = trees.fold(init=0, (acc, t) => acc + t.num_nodes())
   let nodes = Nodes::make(total)
   let leaf_value = FixedArray::make(total, (0.0 : Float))
@@ -187,10 +258,13 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
     heap_leaf,
     heap_depth,
     heap_size,
-    // a heap forest larger than about 4 MB is streamed once per block, so
-    // bigger blocks pay off; measured in V8
-    block: if heap_depth > 0 &&
-      trees.length().to_int64() * heap_size.to_int64() * 8L > 0x400000L {
+    // a big forest is streamed once per block, so bigger blocks pay off:
+    // heap forests over about 4 MB in V8, compact ones over 2 MB on wasm
+    block: if (
+        heap_depth > 0 &&
+        trees.length().to_int64() * heap_size.to_int64() * 8L > 0x400000L
+      ) ||
+      (STREAM_BLOCK && heap_depth == 0 && total.to_int64() * 8L > 0x200000L) {
       256
     } else {
       BLOCK
@@ -211,6 +285,14 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
     search,
     search_start,
     search_half,
+    bucket_lo,
+    bucket_scale,
+    bucket_top,
+    bucket_scan,
+    table_start,
+    table,
+    bcut,
+    bcut_start,
     num_feature,
   })
 }
@@ -236,6 +318,82 @@ fn lower_bound(
 }
 
 ///|
+/// `ranks` for rows `start .. start + n` of a row-major matrix with `cols`
+/// columns, rank slots of row `r` at `out[r * 2 * num_feature]`. Works one
+/// feature at a time, so each feature's table is looked up once per block.
+fn Lockstep::ranks_block(
+  self : Lockstep,
+  data : Array[Float],
+  cols : Int32,
+  start : Int32,
+  n : Int32,
+  out : Buf,
+) -> Unit {
+  let width = 2 * self.num_feature
+  for f in 0..<self.num_feature {
+    let slot = 2 * f
+    if f >= cols {
+      for r in 0..<n {
+        out.set(r * width + slot, 0)
+        out.set(r * width + slot + 1, RANK_HIGH)
+      }
+      continue
+    }
+    let scan = self.bucket_scan.unsafe_get(f)
+    if scan >= 0 {
+      let lo = self.bucket_lo.unsafe_get(f)
+      let scale = self.bucket_scale.unsafe_get(f)
+      let top = self.bucket_top.unsafe_get(f)
+      let ts = self.table_start.unsafe_get(f)
+      let bs = self.bcut_start.unsafe_get(f)
+      for r in 0..<n {
+        let x = data[(start + r) * cols + f]
+        let o = r * width + slot
+        if x.is_nan() {
+          out.set(o, 0)
+          out.set(o + 1, RANK_HIGH)
+        } else {
+          let xd = x.to_double()
+          let r0 = self.table.unsafe_get(ts + bucket_of(xd, lo, scale, top))
+          let mut k = r0
+          for j in 0..<scan {
+            // a threshold equal to x counts: x >= t goes right
+            if self.bcut.unsafe_get(bs + r0 + j) <= xd {
+              k = k + 1
+            }
+          }
+          out.set(o, k)
+          out.set(o + 1, k)
+        }
+      }
+    } else {
+      let s = self.search
+      let lo = self.search_start.unsafe_get(f)
+      let half = self.search_half.unsafe_get(f)
+      for r in 0..<n {
+        let x = data[(start + r) * cols + f]
+        let o = r * width + slot
+        if x.is_nan() {
+          out.set(o, 0)
+          out.set(o + 1, RANK_HIGH)
+        } else {
+          let key = float_key(x)
+          let mut b = lo
+          let mut step = half
+          while step > 0 {
+            // in bounds: b + step - 1 < lo + 2 * half - 1, the padded length
+            b = b + advance(s.unsafe_get(b + step - 1), key, step)
+            step = step / 2
+          }
+          out.set(o, b - lo)
+          out.set(o + 1, b - lo)
+        }
+      }
+    }
+  }
+}
+
+///|
 /// Write the two rank slots of every feature of `row` to
 /// `out[at : at + 2 * num_feature]`.
 fn Lockstep::ranks(
@@ -255,6 +413,28 @@ fn Lockstep::ranks(
       out.set(at + 2 * f + 1, RANK_HIGH)
     } else {
       // number of thresholds <= x
+      let scan = self.bucket_scan.unsafe_get(f)
+      if scan >= 0 {
+        let xd = x.to_double()
+        let b = bucket_of(
+          xd,
+          self.bucket_lo.unsafe_get(f),
+          self.bucket_scale.unsafe_get(f),
+          self.bucket_top.unsafe_get(f),
+        )
+        let r0 = self.table.unsafe_get(self.table_start.unsafe_get(f) + b)
+        let at_cut = self.bcut_start.unsafe_get(f) + r0
+        let mut r = r0
+        for j in 0..<scan {
+          // a threshold equal to x counts: x >= t goes right
+          if self.bcut.unsafe_get(at_cut + j) <= xd {
+            r = r + 1
+          }
+        }
+        out.set(at + 2 * f, r)
+        out.set(at + 2 * f + 1, r)
+        continue
+      }
       let key = float_key(x)
       let s = self.search
       let lo = self.search_start[f]
@@ -707,4 +887,31 @@ fn Lockstep::accumulate_heap(
     }
     continue t + 1
   }
+}
+
+///|
+const MAX_BUCKETS : Int32 = 0x10000
+
+///|
+const MAX_SCAN : Int32 = 4
+
+///|
+/// Bucket of `x` (not NaN) in a feature's table; monotone in `x`.
+fn bucket_of(x : Double, lo : Double, scale : Double, top : Int32) -> Int32 {
+  let t = (x - lo) * scale
+  if t > 0.0 {
+    if t < top.to_double() {
+      t.to_int()
+    } else {
+      top
+    }
+  } else {
+    0
+  }
+}
+
+///|
+/// The threshold value whose `float_key` is `k`.
+fn key_value(k : Int32) -> Float {
+  Float::reinterpret_from_int(if k >= 0 { k } else { -k | (1 << 31) })
 }

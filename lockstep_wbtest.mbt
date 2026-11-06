@@ -92,3 +92,76 @@ test "lockstep agrees with the verified kernel on boundary values" {
   let b = kernel_margin(m, [0.25])
   assert_eq(a[0].reinterpret_as_int(), b[0].reinterpret_as_int())
 }
+
+///|
+test "rank tables count thresholds exactly" {
+  let inf = Float::from_double(1.0) / 0.0
+  let nan = Float::from_double(0.0) / 0.0
+  let per_feature : Array[Array[Float]] = [
+    [-inf, -1.0, -0.0, 1.0, inf],
+    [1.0e-30, 1.0e-29, 1.0e30],
+    [5.0],
+    [1.0, Float::reinterpret_from_int((1.0 : Float).reinterpret_as_int() + 1)],
+    [],
+    // crowded near zero with one far value: falls back to binary search
+    Array::makei(40, i => Float::from_int(i) * 1.0e-6) + [1.0e20],
+    [Float::reinterpret_from_int(1), 0.0, -Float::reinterpret_from_int(1)],
+  ]
+  let nf = per_feature.length()
+  let trees : Array[Tree] = []
+  for f, ts in per_feature {
+    for t in ts {
+      trees.push(
+        Tree::new(
+          left=[1, -1, -1],
+          right=[2, -1, -1],
+          feature=[f, 0, 0],
+          value=[t, 0.0, 1.0],
+          default_left=[true, false, false],
+        ),
+      )
+    }
+  }
+  let ls = Lockstep::build(trees[:], nf).unwrap()
+  // probe values: every threshold, its float neighbours, and specials
+  let probes : Array[Float] = [nan, inf, -inf, 0.0, -0.0, 2.0, -2.0, 1.0e10]
+  for ts in per_feature {
+    for t in ts {
+      let b = t.reinterpret_as_int()
+      probes.push(t)
+      probes.push(Float::reinterpret_from_int(b + 1))
+      probes.push(Float::reinterpret_from_int(b - 1))
+    }
+  }
+  let data : Array[Float] = []
+  for p in probes {
+    for _ in 0..<nf {
+      data.push(p)
+    }
+  }
+  let n = probes.length()
+  let out = Buf::new(n * 2 * nf)
+  ls.ranks_block(data, nf, 0, n, out)
+  for r, p in probes {
+    for f, ts in per_feature {
+      let lo = out.get(r * 2 * nf + 2 * f)
+      let hi = out.get(r * 2 * nf + 2 * f + 1)
+      if p.is_nan() {
+        assert_eq(lo, 0)
+        assert_eq(hi, RANK_HIGH)
+      } else {
+        let mut want = 0
+        let keys : Array[Int32] = ts.map(float_key)
+        keys.sort()
+        keys.dedup()
+        for k in keys {
+          if k <= float_key(p) {
+            want += 1
+          }
+        }
+        assert_eq(lo, want)
+        assert_eq(hi, want)
+      }
+    }
+  }
+}

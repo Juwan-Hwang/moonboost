@@ -1,7 +1,7 @@
 ///|
 /// Row-major dense feature matrix. Missing values are NaN.
 pub struct DenseMatrix {
-  data : Array[Float]
+  data : FixedArray[Float]
   rows : Int32
   cols : Int32
 }
@@ -9,6 +9,20 @@ pub struct DenseMatrix {
 ///|
 pub fn DenseMatrix::new(
   data : Array[Float],
+  cols~ : Int32,
+) -> DenseMatrix raise ModelError {
+  if cols <= 0 || data.length() % cols != 0 {
+    raise InvalidModel(
+      "data length \{data.length()} is not a multiple of \{cols} columns",
+    )
+  }
+  { data: FixedArray::from_array(data), rows: data.length() / cols, cols, }
+}
+
+///|
+/// Like `DenseMatrix::new`, but takes ownership of `data` without copying it.
+pub fn DenseMatrix::from_fixed(
+  data : FixedArray[Float],
   cols~ : Int32,
 ) -> DenseMatrix raise ModelError {
   if cols <= 0 || data.length() % cols != 0 {
@@ -80,7 +94,7 @@ pub fn DenseMatrix::from_csv(
   if cols == -1 {
     raise InvalidModel("CSV has no data rows")
   }
-  { data, rows: data.length() / cols, cols, }
+  { data: FixedArray::from_array(data), rows: data.length() / cols, cols, }
 }
 
 ///|

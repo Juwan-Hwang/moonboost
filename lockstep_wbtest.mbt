@@ -141,7 +141,7 @@ test "rank tables count thresholds exactly" {
   }
   let n = probes.length()
   let out = Buf::new(n * 2 * nf)
-  ls.ranks_block(data, nf, 0, n, out)
+  ls.ranks_block(FixedArray::from_array(data), nf, 0, n, out)
   for r, p in probes {
     for f, ts in per_feature {
       let lo = out.get(r * 2 * nf + 2 * f)

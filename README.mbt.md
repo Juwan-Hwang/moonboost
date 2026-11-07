@@ -87,9 +87,9 @@ better. XGBoost is timed through its C API (`XGBoosterPredictFromDense`,
 
 | Model | moonboost native | moonboost JS (Node 22) | moonboost wasm / wasm-gc (moonrun) | XGBoost 3.4.1 C API |
 |---|---|---|---|---|
-| 100 trees, depth 4 | 0.46 | 2.5 | 0.9 / 1.1 | 1.00 |
-| 500 trees, depth 8 | 3.32 | 11.7 | 6.2 / 8.5 | 12.9 |
-| 1000 trees, depth 10 | 8.9 | 28.4 | 15.5 / 21.7 | 35.0 |
+| 100 trees, depth 4 | 0.46 | 2.0 | 0.83 / 0.87 | 1.00 |
+| 500 trees, depth 8 | 3.3 | 9.7 | 4.6 / 6.6 | 12.8 |
+| 1000 trees, depth 10 | 9.2 | 24.0 | 11.5 / 14.0 | 35.0 |
 
 One row per call (rows predicted one at a time, µs per row), which is what
 an online caller pays. For XGBoost this is one `XGBoosterPredictFromDense`
@@ -129,7 +129,9 @@ How the batch path works (`lockstep.mbt`):
 - **Self-looping leaves.** Children sit side by side, so the next node is
   `left + go_right`, and a leaf is its own left child with a threshold no rank
   reaches. Every row takes the same number of steps through a tree, so 64 rows
-  walk it in lockstep with no branches.
+  walk it in lockstep with no branches. On JS and wasm, four rows walk two
+  trees to their leaves at once in locals: eight independent chains of loads,
+  and no node index written back between levels.
 - **One row, many trees.** A single-row call walks sixteen trees to their
   leaves side by side (four on plain wasm, where more spill), so their
   cache misses overlap, instead of using the block machinery.
@@ -143,7 +145,7 @@ How the batch path works (`lockstep.mbt`):
 
 Leaves are still added in tree order in float32, which is what keeps the
 results identical. Models with categorical splits use the verified kernel.
-The JS bundle minified with esbuild is 146 KB, 47.0 KB gzipped, with no other runtime.
+The JS bundle minified with esbuild is 149 KB, 47.3 KB gzipped, with no other runtime.
 
 ## Usage
 
@@ -193,6 +195,8 @@ moon build --target js --release
 import { load_model, predict, predict_batch } from "./_build/js/release/build/web/web.js";
 const model = load_model(jsonText);
 predict(model, [5.1, 3.5, 1.4, 0.2]);
+// rows may be a Float32Array (used as is) or any array of numbers
+predict_batch(model, new Float32Array(rowMajorValues), 4); // 4 columns
 ```
 
 See `examples/node/iris.mjs`.

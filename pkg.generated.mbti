@@ -24,11 +24,12 @@ pub fn ModelError::to_repr(Self) -> @debug.Repr
 type Compiled
 
 pub struct DenseMatrix {
-  data : Array[Float]
+  data : FixedArray[Float]
   rows : Int32
   cols : Int32
 }
 pub fn DenseMatrix::from_csv(StringView, header? : Bool, sep? : StringView) -> Self raise ModelError
+pub fn DenseMatrix::from_fixed(FixedArray[Float], cols~ : Int32) -> Self raise ModelError
 pub fn DenseMatrix::new(Array[Float], cols~ : Int32) -> Self raise ModelError
 pub fn DenseMatrix::row(Self, Int32) -> ArrayView[Float]
 

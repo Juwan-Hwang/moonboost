@@ -82,7 +82,7 @@ pub fn predict_batch(
   data : FixedArray[Double],
   cols : Int32,
 ) -> FixedArray[Double] {
-  let m = @moonboost.DenseMatrix::new(to_floats(data), cols~) catch {
+  let m = @moonboost.DenseMatrix::from_fixed(to_float_matrix(data), cols~) catch {
     _ => return []
   }
   to_doubles(model.predict_batch(m))

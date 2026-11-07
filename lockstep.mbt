@@ -323,7 +323,7 @@ fn lower_bound(
 /// feature at a time, so each feature's table is looked up once per block.
 fn Lockstep::ranks_block(
   self : Lockstep,
-  data : Array[Float],
+  data : FixedArray[Float],
   cols : Int32,
   start : Int32,
   n : Int32,
@@ -775,74 +775,138 @@ fn Lockstep::accumulate_heap(
     if t + 1 < trees {
       let bb = ba + size
       let gb = tree_group[t + 1]
-      for r in 0..<n {
-        let rb = r * width
-        idx.set(
-          r,
-          {
-            let i = 1
-            let w = heap.get(ba + i)
-            (i << 1) |
-            (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+      // four rows by two trees walked to their leaves in locals: eight
+      // independent chains hide load latency without an `idx` round trip
+      let mut r = 0
+      while r + 3 < n {
+        let r0 = r * width
+        let r1 = r0 + width
+        let r2 = r1 + width
+        let r3 = r2 + width
+        let mut a0 = 1
+        let mut c0 = 1
+        let mut a1 = 1
+        let mut c1 = 1
+        let mut a2 = 1
+        let mut c2 = 1
+        let mut a3 = 1
+        let mut c3 = 1
+        for _ in 0..<d {
+          a0 = {
+            let w = heap.get(ba + a0)
+            (a0 << 1) |
+            (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
             31).reinterpret_as_int()
-          },
-        )
-        idx.set(
-          n + r,
-          {
-            let i = 1
-            let w = heap.get(bb + i)
-            (i << 1) |
-            (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
+          }
+          c0 = {
+            let w = heap.get(bb + c0)
+            (c0 << 1) |
+            (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
             31).reinterpret_as_int()
-          },
+          }
+          a1 = {
+            let w = heap.get(ba + a1)
+            (a1 << 1) |
+            (((w & 0xFFFF) - ranks.get(r1 + (w >> 16))).reinterpret_as_uint() >>
+            31).reinterpret_as_int()
+          }
+          c1 = {
+            let w = heap.get(bb + c1)
+            (c1 << 1) |
+            (((w & 0xFFFF) - ranks.get(r1 + (w >> 16))).reinterpret_as_uint() >>
+            31).reinterpret_as_int()
+          }
+          a2 = {
+            let w = heap.get(ba + a2)
+            (a2 << 1) |
+            (((w & 0xFFFF) - ranks.get(r2 + (w >> 16))).reinterpret_as_uint() >>
+            31).reinterpret_as_int()
+          }
+          c2 = {
+            let w = heap.get(bb + c2)
+            (c2 << 1) |
+            (((w & 0xFFFF) - ranks.get(r2 + (w >> 16))).reinterpret_as_uint() >>
+            31).reinterpret_as_int()
+          }
+          a3 = {
+            let w = heap.get(ba + a3)
+            (a3 << 1) |
+            (((w & 0xFFFF) - ranks.get(r3 + (w >> 16))).reinterpret_as_uint() >>
+            31).reinterpret_as_int()
+          }
+          c3 = {
+            let w = heap.get(bb + c3)
+            (c3 << 1) |
+            (((w & 0xFFFF) - ranks.get(r3 + (w >> 16))).reinterpret_as_uint() >>
+            31).reinterpret_as_int()
+          }
+        }
+        let q = (r + 0) * groups
+        margin.unsafe_set(
+          q + ga,
+          margin.unsafe_get(q + ga) + leaf.get(ba + a0 - size),
         )
+        margin.unsafe_set(
+          q + gb,
+          margin.unsafe_get(q + gb) + leaf.get(bb + c0 - size),
+        )
+        let q = (r + 1) * groups
+        margin.unsafe_set(
+          q + ga,
+          margin.unsafe_get(q + ga) + leaf.get(ba + a1 - size),
+        )
+        margin.unsafe_set(
+          q + gb,
+          margin.unsafe_get(q + gb) + leaf.get(bb + c1 - size),
+        )
+        let q = (r + 2) * groups
+        margin.unsafe_set(
+          q + ga,
+          margin.unsafe_get(q + ga) + leaf.get(ba + a2 - size),
+        )
+        margin.unsafe_set(
+          q + gb,
+          margin.unsafe_get(q + gb) + leaf.get(bb + c2 - size),
+        )
+        let q = (r + 3) * groups
+        margin.unsafe_set(
+          q + ga,
+          margin.unsafe_get(q + ga) + leaf.get(ba + a3 - size),
+        )
+        margin.unsafe_set(
+          q + gb,
+          margin.unsafe_get(q + gb) + leaf.get(bb + c3 - size),
+        )
+        r += 4
       }
-      for _ in 2..<d {
-        for r in 0..<n {
-          let rb = r * width
-          idx.set(
-            r,
-            {
-              let i = idx.get(r)
-              let w = heap.get(ba + i)
-              (i << 1) |
-              (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
-              31).reinterpret_as_int()
-            },
-          )
-          idx.set(
-            n + r,
-            {
-              let i = idx.get(n + r)
-              let w = heap.get(bb + i)
-              (i << 1) |
-              (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
-              31).reinterpret_as_int()
-            },
-          )
+      while r < n {
+        let r0 = r * width
+        let mut a0 = 1
+        let mut c0 = 1
+        for _ in 0..<d {
+          a0 = {
+            let w = heap.get(ba + a0)
+            (a0 << 1) |
+            (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
+            31).reinterpret_as_int()
+          }
+          c0 = {
+            let w = heap.get(bb + c0)
+            (c0 << 1) |
+            (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
+            31).reinterpret_as_int()
+          }
         }
-      }
-      for r in 0..<n {
-        let rb = r * width
-        let la = {
-          let i = idx.get(r)
-          let w = heap.get(ba + i)
-          (i << 1) |
-          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
-          31).reinterpret_as_int()
-        }
-        let lb = {
-          let i = idx.get(n + r)
-          let w = heap.get(bb + i)
-          (i << 1) |
-          (((w & 0xFFFF) - ranks.get(rb + (w >> 16))).reinterpret_as_uint() >>
-          31).reinterpret_as_int()
-        }
-        let k = r * groups + ga
-        margin.unsafe_set(k, margin.unsafe_get(k) + leaf.get(ba + la - size))
-        let k = r * groups + gb
-        margin.unsafe_set(k, margin.unsafe_get(k) + leaf.get(bb + lb - size))
+        let q = r * groups
+        margin.unsafe_set(
+          q + ga,
+          margin.unsafe_get(q + ga) + leaf.get(ba + a0 - size),
+        )
+        margin.unsafe_set(
+          q + gb,
+          margin.unsafe_get(q + gb) + leaf.get(bb + c0 - size),
+        )
+        r += 1
       }
       continue t + 2
     }

@@ -43,83 +43,139 @@ fn Nodes::walk_pair(
   gb : Int32,
 ) -> Unit {
   let nodes = self.0
-  for r in 0..<n {
-    let base = r * width
-    let nd1 = nodes.unsafe_get(a)
-    let w1 = nd1.to_int()
-    let rk1 = ranks.get(base + (w1 >> 16))
-    let p1 = (nd1 >> 32).to_int() +
-      (((w1 & 0xFFFF) - rk1).reinterpret_as_uint() >> 31).reinterpret_as_int()
-    let nd2 = nodes.unsafe_get(b)
-    let w2 = nd2.to_int()
-    let rk2 = ranks.get(base + (w2 >> 16))
-    let p2 = (nd2 >> 32).to_int() +
-      (((w2 & 0xFFFF) - rk2).reinterpret_as_uint() >> 31).reinterpret_as_int()
-    idx.set(2 * r, p1)
-    idx.set(2 * r + 1, p2)
-  }
-  let mut lv = 2
-  while lv + 1 < d {
-    for r in 0..<n {
-      let base = r * width
-      let nd3 = nodes.unsafe_get(idx.get(2 * r))
-      let w3 = nd3.to_int()
-      let rk3 = ranks.get(base + (w3 >> 16))
-      let x = (nd3 >> 32).to_int() +
-        (((w3 & 0xFFFF) - rk3).reinterpret_as_uint() >> 31).reinterpret_as_int()
-      let nd4 = nodes.unsafe_get(idx.get(2 * r + 1))
-      let w4 = nd4.to_int()
-      let rk4 = ranks.get(base + (w4 >> 16))
-      let y = (nd4 >> 32).to_int() +
-        (((w4 & 0xFFFF) - rk4).reinterpret_as_uint() >> 31).reinterpret_as_int()
-      let nd5 = nodes.unsafe_get(x)
-      let w5 = nd5.to_int()
-      let rk5 = ranks.get(base + (w5 >> 16))
-      let x2 = (nd5 >> 32).to_int() +
-        (((w5 & 0xFFFF) - rk5).reinterpret_as_uint() >> 31).reinterpret_as_int()
-      let nd6 = nodes.unsafe_get(y)
-      let w6 = nd6.to_int()
-      let rk6 = ranks.get(base + (w6 >> 16))
-      let y2 = (nd6 >> 32).to_int() +
-        (((w6 & 0xFFFF) - rk6).reinterpret_as_uint() >> 31).reinterpret_as_int()
-      idx.set(2 * r, x2)
-      idx.set(2 * r + 1, y2)
+  // four rows by two trees walk to their leaves in locals: eight independent
+  // chains keep loads in flight with no `idx` round trip per level
+  ignore(idx)
+  let mut r = 0
+  while r + 3 < n {
+    let r0 = r * width
+    let r1 = r0 + width
+    let r2 = r1 + width
+    let r3 = r2 + width
+    let mut a0 = a
+    let mut c0 = b
+    let mut a1 = a
+    let mut c1 = b
+    let mut a2 = a
+    let mut c2 = b
+    let mut a3 = a
+    let mut c3 = b
+    for _ in 0..<d {
+      a0 = {
+        let nd = nodes.unsafe_get(a0)
+        let w = nd.to_int()
+        (nd >> 32).to_int() +
+        (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >> 31).reinterpret_as_int()
+      }
+      c0 = {
+        let nd = nodes.unsafe_get(c0)
+        let w = nd.to_int()
+        (nd >> 32).to_int() +
+        (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >> 31).reinterpret_as_int()
+      }
+      a1 = {
+        let nd = nodes.unsafe_get(a1)
+        let w = nd.to_int()
+        (nd >> 32).to_int() +
+        (((w & 0xFFFF) - ranks.get(r1 + (w >> 16))).reinterpret_as_uint() >> 31).reinterpret_as_int()
+      }
+      c1 = {
+        let nd = nodes.unsafe_get(c1)
+        let w = nd.to_int()
+        (nd >> 32).to_int() +
+        (((w & 0xFFFF) - ranks.get(r1 + (w >> 16))).reinterpret_as_uint() >> 31).reinterpret_as_int()
+      }
+      a2 = {
+        let nd = nodes.unsafe_get(a2)
+        let w = nd.to_int()
+        (nd >> 32).to_int() +
+        (((w & 0xFFFF) - ranks.get(r2 + (w >> 16))).reinterpret_as_uint() >> 31).reinterpret_as_int()
+      }
+      c2 = {
+        let nd = nodes.unsafe_get(c2)
+        let w = nd.to_int()
+        (nd >> 32).to_int() +
+        (((w & 0xFFFF) - ranks.get(r2 + (w >> 16))).reinterpret_as_uint() >> 31).reinterpret_as_int()
+      }
+      a3 = {
+        let nd = nodes.unsafe_get(a3)
+        let w = nd.to_int()
+        (nd >> 32).to_int() +
+        (((w & 0xFFFF) - ranks.get(r3 + (w >> 16))).reinterpret_as_uint() >> 31).reinterpret_as_int()
+      }
+      c3 = {
+        let nd = nodes.unsafe_get(c3)
+        let w = nd.to_int()
+        (nd >> 32).to_int() +
+        (((w & 0xFFFF) - ranks.get(r3 + (w >> 16))).reinterpret_as_uint() >> 31).reinterpret_as_int()
+      }
     }
-    lv += 2
+    let q = (r + 0) * groups
+    margin.unsafe_set(
+      q + ga,
+      margin.unsafe_get(q + ga) + leaf_value.unsafe_get(a0),
+    )
+    margin.unsafe_set(
+      q + gb,
+      margin.unsafe_get(q + gb) + leaf_value.unsafe_get(c0),
+    )
+    let q = (r + 1) * groups
+    margin.unsafe_set(
+      q + ga,
+      margin.unsafe_get(q + ga) + leaf_value.unsafe_get(a1),
+    )
+    margin.unsafe_set(
+      q + gb,
+      margin.unsafe_get(q + gb) + leaf_value.unsafe_get(c1),
+    )
+    let q = (r + 2) * groups
+    margin.unsafe_set(
+      q + ga,
+      margin.unsafe_get(q + ga) + leaf_value.unsafe_get(a2),
+    )
+    margin.unsafe_set(
+      q + gb,
+      margin.unsafe_get(q + gb) + leaf_value.unsafe_get(c2),
+    )
+    let q = (r + 3) * groups
+    margin.unsafe_set(
+      q + ga,
+      margin.unsafe_get(q + ga) + leaf_value.unsafe_get(a3),
+    )
+    margin.unsafe_set(
+      q + gb,
+      margin.unsafe_get(q + gb) + leaf_value.unsafe_get(c3),
+    )
+    r += 4
   }
-  if lv < d {
-    for r in 0..<n {
-      let base = r * width
-      let nd7 = nodes.unsafe_get(idx.get(2 * r))
-      let w7 = nd7.to_int()
-      let rk7 = ranks.get(base + (w7 >> 16))
-      let x = (nd7 >> 32).to_int() +
-        (((w7 & 0xFFFF) - rk7).reinterpret_as_uint() >> 31).reinterpret_as_int()
-      let nd8 = nodes.unsafe_get(idx.get(2 * r + 1))
-      let w8 = nd8.to_int()
-      let rk8 = ranks.get(base + (w8 >> 16))
-      let y = (nd8 >> 32).to_int() +
-        (((w8 & 0xFFFF) - rk8).reinterpret_as_uint() >> 31).reinterpret_as_int()
-      idx.set(2 * r, x)
-      idx.set(2 * r + 1, y)
+  while r < n {
+    let r0 = r * width
+    let mut a0 = a
+    let mut c0 = b
+    for _ in 0..<d {
+      a0 = {
+        let nd = nodes.unsafe_get(a0)
+        let w = nd.to_int()
+        (nd >> 32).to_int() +
+        (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >> 31).reinterpret_as_int()
+      }
+      c0 = {
+        let nd = nodes.unsafe_get(c0)
+        let w = nd.to_int()
+        (nd >> 32).to_int() +
+        (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >> 31).reinterpret_as_int()
+      }
     }
-  }
-  for r in 0..<n {
-    let base = r * width
-    let nd9 = nodes.unsafe_get(idx.get(2 * r))
-    let w9 = nd9.to_int()
-    let rk9 = ranks.get(base + (w9 >> 16))
-    let l1 = (nd9 >> 32).to_int() +
-      (((w9 & 0xFFFF) - rk9).reinterpret_as_uint() >> 31).reinterpret_as_int()
-    let nd10 = nodes.unsafe_get(idx.get(2 * r + 1))
-    let w10 = nd10.to_int()
-    let rk10 = ranks.get(base + (w10 >> 16))
-    let l2 = (nd10 >> 32).to_int() +
-      (((w10 & 0xFFFF) - rk10).reinterpret_as_uint() >> 31).reinterpret_as_int()
-    let k = r * groups + ga
-    margin.unsafe_set(k, margin.unsafe_get(k) + leaf_value.unsafe_get(l1))
-    let k = r * groups + gb
-    margin.unsafe_set(k, margin.unsafe_get(k) + leaf_value.unsafe_get(l2))
+    let q = r * groups
+    margin.unsafe_set(
+      q + ga,
+      margin.unsafe_get(q + ga) + leaf_value.unsafe_get(a0),
+    )
+    margin.unsafe_set(
+      q + gb,
+      margin.unsafe_get(q + gb) + leaf_value.unsafe_get(c0),
+    )
+    r += 1
   }
 }
 

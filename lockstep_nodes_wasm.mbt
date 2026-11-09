@@ -518,3 +518,325 @@ fn Nodes::single_narrow(
     t += 1
   }
 }
+
+///|
+/// Whether short forests get the packed value heap (`Lockstep::vheap`).
+const VALUE_HEAP : Bool = true
+
+///|
+/// A `vheap` split: the order key (`float_key`) of the split value above the
+/// rank slot, compared as an integer (`key(x) >= key(value)` goes right),
+/// which wasm does without a branch.
+fn vheap_split(value : Float, slot : Int32) -> Int64 {
+  (float_key(value).to_int64() << 16) | slot.to_int64()
+}
+
+///|
+/// A padded `vheap` node: a key above every float's, which no row reaches.
+const VHEAP_PAD : Int64 = 0x7FFFFFFF0000L
+
+///|
+/// Predict a block of rows with the value heap (single output group).
+fn Lockstep::predict_vheap(
+  self : Lockstep,
+  data : FixedArray[Float],
+  cols : Int32,
+  start : Int32,
+  n : Int32,
+  keys : Buf,
+  vals : FBuf,
+  margin : FixedArray[Float],
+) -> Unit {
+  ignore(vals)
+  self.keys_block(data, cols, start, n, keys)
+  self.accumulate_vheap(keys, n, margin)
+}
+
+///|
+/// `accumulate_values` over the packed native copy `vheap` (one output
+/// group): rows walk every tree with their margins in locals.
+fn Lockstep::accumulate_vheap(
+  self : Lockstep,
+  vals : Buf,
+  n : Int32,
+  margin : FixedArray[Float],
+) -> Unit {
+  let width = 2 * self.num_feature
+  let vh = self.vheap
+  let leaf = self.vheap_leaf
+  let d = self.vheap_depth
+  let size = self.heap_size
+  let trees = self.roots.length()
+  let mut r = 0
+  while r + 3 < n {
+    let r0 = (r + 0) * width
+    let r1 = (r + 1) * width
+    let r2 = (r + 2) * width
+    let r3 = (r + 3) * width
+    let mut m0 = margin.unsafe_get(r + 0)
+    let mut m1 = margin.unsafe_get(r + 1)
+    let mut m2 = margin.unsafe_get(r + 2)
+    let mut m3 = margin.unsafe_get(r + 3)
+    let mut t = 0
+    while t + 3 < trees {
+      let b0 = (t + 0) * size
+      let b1 = (t + 1) * size
+      let b2 = (t + 2) * size
+      let b3 = (t + 3) * size
+      let mut x0_0 = 1
+      let mut x0_1 = 1
+      let mut x0_2 = 1
+      let mut x0_3 = 1
+      let mut x1_0 = 1
+      let mut x1_1 = 1
+      let mut x1_2 = 1
+      let mut x1_3 = 1
+      let mut x2_0 = 1
+      let mut x2_1 = 1
+      let mut x2_2 = 1
+      let mut x2_3 = 1
+      let mut x3_0 = 1
+      let mut x3_1 = 1
+      let mut x3_2 = 1
+      let mut x3_3 = 1
+      for _ in 0..<d {
+        x0_0 = {
+          let nd = vh.unsafe_get(b0 + x0_0)
+          let kv = vals.get(r0 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x0_0 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x0_1 = {
+          let nd = vh.unsafe_get(b1 + x0_1)
+          let kv = vals.get(r0 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x0_1 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x0_2 = {
+          let nd = vh.unsafe_get(b2 + x0_2)
+          let kv = vals.get(r0 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x0_2 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x0_3 = {
+          let nd = vh.unsafe_get(b3 + x0_3)
+          let kv = vals.get(r0 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x0_3 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x1_0 = {
+          let nd = vh.unsafe_get(b0 + x1_0)
+          let kv = vals.get(r1 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x1_0 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x1_1 = {
+          let nd = vh.unsafe_get(b1 + x1_1)
+          let kv = vals.get(r1 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x1_1 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x1_2 = {
+          let nd = vh.unsafe_get(b2 + x1_2)
+          let kv = vals.get(r1 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x1_2 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x1_3 = {
+          let nd = vh.unsafe_get(b3 + x1_3)
+          let kv = vals.get(r1 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x1_3 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x2_0 = {
+          let nd = vh.unsafe_get(b0 + x2_0)
+          let kv = vals.get(r2 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x2_0 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x2_1 = {
+          let nd = vh.unsafe_get(b1 + x2_1)
+          let kv = vals.get(r2 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x2_1 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x2_2 = {
+          let nd = vh.unsafe_get(b2 + x2_2)
+          let kv = vals.get(r2 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x2_2 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x2_3 = {
+          let nd = vh.unsafe_get(b3 + x2_3)
+          let kv = vals.get(r2 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x2_3 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x3_0 = {
+          let nd = vh.unsafe_get(b0 + x3_0)
+          let kv = vals.get(r3 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x3_0 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x3_1 = {
+          let nd = vh.unsafe_get(b1 + x3_1)
+          let kv = vals.get(r3 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x3_1 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x3_2 = {
+          let nd = vh.unsafe_get(b2 + x3_2)
+          let kv = vals.get(r3 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x3_2 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x3_3 = {
+          let nd = vh.unsafe_get(b3 + x3_3)
+          let kv = vals.get(r3 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x3_3 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+      }
+      m0 = m0 +
+        leaf.unsafe_get(b0 + x0_0 - size) +
+        leaf.unsafe_get(b1 + x0_1 - size) +
+        leaf.unsafe_get(b2 + x0_2 - size) +
+        leaf.unsafe_get(b3 + x0_3 - size)
+      m1 = m1 +
+        leaf.unsafe_get(b0 + x1_0 - size) +
+        leaf.unsafe_get(b1 + x1_1 - size) +
+        leaf.unsafe_get(b2 + x1_2 - size) +
+        leaf.unsafe_get(b3 + x1_3 - size)
+      m2 = m2 +
+        leaf.unsafe_get(b0 + x2_0 - size) +
+        leaf.unsafe_get(b1 + x2_1 - size) +
+        leaf.unsafe_get(b2 + x2_2 - size) +
+        leaf.unsafe_get(b3 + x2_3 - size)
+      m3 = m3 +
+        leaf.unsafe_get(b0 + x3_0 - size) +
+        leaf.unsafe_get(b1 + x3_1 - size) +
+        leaf.unsafe_get(b2 + x3_2 - size) +
+        leaf.unsafe_get(b3 + x3_3 - size)
+      t += 4
+    }
+    while t < trees {
+      let b0 = (t + 0) * size
+      let mut x0_0 = 1
+      let mut x1_0 = 1
+      let mut x2_0 = 1
+      let mut x3_0 = 1
+      for _ in 0..<d {
+        x0_0 = {
+          let nd = vh.unsafe_get(b0 + x0_0)
+          let kv = vals.get(r0 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x0_0 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x1_0 = {
+          let nd = vh.unsafe_get(b0 + x1_0)
+          let kv = vals.get(r1 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x1_0 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x2_0 = {
+          let nd = vh.unsafe_get(b0 + x2_0)
+          let kv = vals.get(r2 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x2_0 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x3_0 = {
+          let nd = vh.unsafe_get(b0 + x3_0)
+          let kv = vals.get(r3 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x3_0 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+      }
+      m0 = m0 + leaf.unsafe_get(b0 + x0_0 - size)
+      m1 = m1 + leaf.unsafe_get(b0 + x1_0 - size)
+      m2 = m2 + leaf.unsafe_get(b0 + x2_0 - size)
+      m3 = m3 + leaf.unsafe_get(b0 + x3_0 - size)
+      t += 1
+    }
+    margin.unsafe_set(r + 0, m0)
+    margin.unsafe_set(r + 1, m1)
+    margin.unsafe_set(r + 2, m2)
+    margin.unsafe_set(r + 3, m3)
+    r += 4
+  }
+  while r + 0 < n {
+    let r0 = (r + 0) * width
+    let mut m0 = margin.unsafe_get(r + 0)
+    let mut t = 0
+    while t + 3 < trees {
+      let b0 = (t + 0) * size
+      let b1 = (t + 1) * size
+      let b2 = (t + 2) * size
+      let b3 = (t + 3) * size
+      let mut x0_0 = 1
+      let mut x0_1 = 1
+      let mut x0_2 = 1
+      let mut x0_3 = 1
+      for _ in 0..<d {
+        x0_0 = {
+          let nd = vh.unsafe_get(b0 + x0_0)
+          let kv = vals.get(r0 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x0_0 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x0_1 = {
+          let nd = vh.unsafe_get(b1 + x0_1)
+          let kv = vals.get(r0 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x0_1 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x0_2 = {
+          let nd = vh.unsafe_get(b2 + x0_2)
+          let kv = vals.get(r0 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x0_2 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+        x0_3 = {
+          let nd = vh.unsafe_get(b3 + x0_3)
+          let kv = vals.get(r0 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x0_3 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+      }
+      m0 = m0 +
+        leaf.unsafe_get(b0 + x0_0 - size) +
+        leaf.unsafe_get(b1 + x0_1 - size) +
+        leaf.unsafe_get(b2 + x0_2 - size) +
+        leaf.unsafe_get(b3 + x0_3 - size)
+      t += 4
+    }
+    while t < trees {
+      let b0 = (t + 0) * size
+      let mut x0_0 = 1
+      for _ in 0..<d {
+        x0_0 = {
+          let nd = vh.unsafe_get(b0 + x0_0)
+          let kv = vals.get(r0 + (nd & 0xFFFFL).to_int()).to_int64()
+          (x0_0 << 1) | (((kv - (nd >> 16)) >> 63) + 1L).to_int()
+        }
+      }
+      m0 = m0 + leaf.unsafe_get(b0 + x0_0 - size)
+      t += 1
+    }
+    margin.unsafe_set(r + 0, m0)
+    r += 1
+  }
+}
+
+///|
+/// Row keys for `accumulate_vheap`: slot `2f` holds the order key
+/// (`float_key`) of feature `f`, a missing value as the key of -inf; slot
+/// `2f + 1` the same with a missing value as +inf.
+fn Lockstep::keys_block(
+  self : Lockstep,
+  data : FixedArray[Float],
+  cols : Int32,
+  start : Int32,
+  n : Int32,
+  out : Buf,
+) -> Unit {
+  let nf = self.num_feature
+  let width = 2 * nf
+  let lo = float_key(Float::from_double(-1.0 / 0.0))
+  let hi = float_key(Float::from_double(1.0 / 0.0))
+  let shared = if cols < nf { cols } else { nf }
+  for r in 0..<n {
+    let o = r * width
+    let at = (start + r) * cols
+    for f in 0..<shared {
+      let x = data[at + f]
+      if x.is_nan() {
+        out.set(o + 2 * f, lo)
+        out.set(o + 2 * f + 1, hi)
+      } else {
+        let k = float_key(x)
+        out.set(o + 2 * f, k)
+        out.set(o + 2 * f + 1, k)
+      }
+    }
+    for f in shared..<nf {
+      out.set(o + 2 * f, lo)
+      out.set(o + 2 * f + 1, hi)
+    }
+  }
+}

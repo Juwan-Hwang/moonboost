@@ -70,6 +70,13 @@ priv struct Lockstep {
   heap_thr : FBuf
   heap_depth : Int32
   heap_size : Int32
+  // Native copy for short forests: the implicit heap with each split packed
+  // as `(value bits << 32) | slot`, so a step is one load and a float
+  // compare; leaf `h` of tree `t` at `t * heap_size + h - heap_size` of
+  // `vheap_leaf`. Empty when not built.
+  vheap : FixedArray[Int64]
+  vheap_leaf : FixedArray[Float]
+  vheap_depth : Int32
   // rows per batch block (see `Model::predict_batch`)
   block : Int32
 }
@@ -225,6 +232,37 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
   }
   let d_all = depth.fold(init=0, (a, d) => if d > a { d } else { a })
   let heap_size = if d_all < 20 { 1 << d_all } else { 0 }
+  let use_vheap = VALUE_HEAP &&
+    d_all >= 2 &&
+    heap_size > 0 &&
+    trees.length() * d_all <= VALUE_STEPS * num_feature &&
+    trees.length().to_int64() * heap_size.to_int64() <=
+    HEAP_FACTOR.to_int64() * total.to_int64()
+  let (vheap, vheap_leaf) = if use_vheap {
+    let vheap = FixedArray::make(trees.length() * heap_size, 0L)
+    let vleaf = FixedArray::make(trees.length() * heap_size, (0.0 : Float))
+    let stack : Array[(Int32, Int32, Int32)] = []
+    for ti, t in trees {
+      let b = ti * heap_size
+      stack.push((0, 1, 0))
+      while stack.pop() is Some((old, h, d)) {
+        if t.left[old] != -1 {
+          vheap[b + h] = vheap_split(t.value[old], words[ti][old] >> 16)
+          stack.push((t.left[old], 2 * h, d + 1))
+          stack.push((t.right[old], 2 * h + 1, d + 1))
+        } else if d < d_all {
+          // a shallow leaf: a split every row fails, so it goes left
+          vheap[b + h] = VHEAP_PAD
+          stack.push((old, 2 * h, d + 1))
+        } else {
+          vleaf[b + h - heap_size] = t.value[old]
+        }
+      }
+    }
+    (vheap, vleaf)
+  } else {
+    ([], [])
+  }
   let use_heap = USE_HEAP &&
     d_all >= 2 &&
     heap_size > 0 &&
@@ -276,6 +314,13 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
     heap_thr,
     heap_depth,
     heap_size,
+    vheap,
+    vheap_leaf,
+    vheap_depth: if use_vheap {
+      d_all
+    } else {
+      0
+    },
     // heap forests walk rows through cache-sized tree chunks, and a big
     // compact forest on wasm (over 2 MB) is streamed once per block, so both
     // take bigger blocks
@@ -1572,5 +1617,5 @@ const VALUE_STEPS : Int32 = 32
 ///|
 /// Whether batches walk row values against split values.
 fn Lockstep::walks_values(self : Lockstep) -> Bool {
-  self.heap_thr.length() > 0
+  self.heap_thr.length() > 0 || self.vheap.length() > 0
 }

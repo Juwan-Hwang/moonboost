@@ -132,8 +132,12 @@ pub fn Model::predict_batch(self : Model, m : DenseMatrix) -> Array[Float] {
     let n = if m.rows - start < block { m.rows - start } else { block }
     margin.fill(self.base_margin)
     if self.fast is Some(fast) && fast.walks_values() && groups == 1 {
-      fast.values_block(m.data, m.cols, start, n, vals)
-      fast.accumulate_values(vals, n, margin)
+      if fast.vheap.length() > 0 {
+        fast.predict_vheap(m.data, m.cols, start, n, ranks, vals, margin)
+      } else {
+        fast.values_block(m.data, m.cols, start, n, vals)
+        fast.accumulate_values(vals, n, margin)
+      }
     } else if self.fast is Some(fast) {
       fast.ranks_block(m.data, m.cols, start, n, ranks)
       fast.accumulate(self.tree_group, groups, ranks, n, idx, margin)

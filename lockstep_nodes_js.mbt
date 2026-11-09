@@ -139,3 +139,33 @@ const STREAM_BLOCK : Bool = false
 /// Whether ranks come from bucket tables (see `Lockstep::bucket_lo`) rather
 /// than a binary search.
 const USE_BUCKETS : Bool = true
+
+///|
+/// Whether short forests get the packed value heap (`Lockstep::vheap`).
+const VALUE_HEAP : Bool = false
+
+///|
+/// Not used on JS (`VALUE_HEAP` is false): JS has its own value walk.
+fn vheap_split(value : Float, slot : Int32) -> Int64 {
+  ignore(value)
+  slot.to_int64()
+}
+
+///|
+const VHEAP_PAD : Int64 = 0L
+
+///|
+/// Not used on JS (`VALUE_HEAP` is false).
+fn Lockstep::predict_vheap(
+  self : Lockstep,
+  data : FixedArray[Float],
+  cols : Int32,
+  start : Int32,
+  n : Int32,
+  keys : Buf,
+  vals : FBuf,
+  margin : FixedArray[Float],
+) -> Unit {
+  ignore((self.vheap_leaf, self.vheap_depth))
+  ignore((data, cols, start, n, keys, vals, margin))
+}

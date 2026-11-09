@@ -83,13 +83,14 @@ proof; that is covered by the differential tests against XGBoost.
 Batch prediction, 10,000 rows of 32 features (5% missing), single thread, on
 an aarch64 Linux VM (Neoverse-V2). µs per row, best of several runs, lower is
 better. XGBoost is timed through its C API (`XGBoosterPredictFromDense`,
-`nthread=1`), so no Python is in its loop.
+`nthread=1`), so no Python is in its loop. All numbers in a table come from
+one session on the same VM; between sessions they move by up to about 25%.
 
 | Model | moonboost native | moonboost JS (Node 22) | moonboost wasm / wasm-gc (moonrun) | XGBoost 3.4.1 C API |
 |---|---|---|---|---|
-| 100 trees, depth 4 | 0.46 | 0.91 | 0.77 / 0.83 | 1.00 |
-| 500 trees, depth 8 | 3.2 | 5.4 | 4.4 / 5.4 | 10.4 |
-| 1000 trees, depth 10 | 7.4 | 12.8 | 10.4 / 12.9 | 29.9 |
+| 100 trees, depth 4 | 0.38 | 0.91 | 0.70 / 0.77 | 1.00 |
+| 500 trees, depth 8 | 3.3 | 5.8 | 4.5 / 5.6 | 12.4 |
+| 1000 trees, depth 10 | 8.5 | 15.7 | 11.0 / 13.6 | 34.2 |
 
 One row per call (rows predicted one at a time, µs per row), which is what
 an online caller pays. For XGBoost this is one `XGBoosterPredictFromDense`
@@ -97,9 +98,9 @@ call per row, so its per-call overhead is included.
 
 | Model | moonboost native | moonboost JS (Node 22) | moonboost wasm / wasm-gc (moonrun) | XGBoost 3.4.1 C API |
 |---|---|---|---|---|
-| 100 trees, depth 4 | 0.7 | 3.0 | 2.1 / 1.6 | 12.2 |
-| 500 trees, depth 8 | 4.8 | 10.8 | 11.2 / 8.7 | 57 |
-| 1000 trees, depth 10 | 12.4 | 30 | 35 / 22 | 154 |
+| 100 trees, depth 4 | 0.7 | 3.1 | 2.2 / 1.7 | 12.2 |
+| 500 trees, depth 8 | 5.2 | 12.4 | 12.5 / 9.1 | 91 |
+| 1000 trees, depth 10 | 17.5 | 69 | 45 / 27 | 316 |
 
 Loading the 1000-tree model (a 19 MB JSON file) takes 325 ms native and
 360 ms in Node, where the JS build parses with the engine's own
@@ -146,14 +147,19 @@ How the batch path works (`lockstep.mbt`):
   a chunk at once and carry on through the whole chunk with their running
   sums in locals, so the margin never goes back to memory and the chunk
   stays in L1 while the 256 rows of a block pass through it.
-- **Values instead of ranks for short forests (JS).** When the forest takes
+- **Values instead of ranks for short forests.** When the forest takes
   few steps per feature (at most 32 tree levels per feature, like the
   100-tree model), ranking every feature costs more than the walk. Such
   forests compare the float32 row value with the split value directly. A
   missing value is stored as -inf in the slot read by default-left splits and
   +inf in the default-right slot, and padded heap nodes split on NaN, so they
   always go left. The comparison becomes a 0/1 value with `+(a >= b)`,
-  which V8 compiles without a branch.
+  which V8 compiles without a branch. Native and wasm build the same padded
+  heap with each split packed into one 64-bit word, so a step is a single
+  load: native packs the split value's bits above the slot and compares
+  floats; wasm packs the value's `float_key` and turns the integer
+  difference's sign into the step (`((k - t) >> 63) + 1`), since a float
+  compare there costs a branch.
 
 Leaves are still added in tree order in float32, which is what keeps the
 results identical. Models with categorical splits use the verified kernel.

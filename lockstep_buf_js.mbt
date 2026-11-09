@@ -26,3 +26,12 @@ extern "js" fn FBuf::get(self : FBuf, i : Int32) -> Float = "(a, i) => a[i]"
 
 ///|
 extern "js" fn FBuf::set(self : FBuf, i : Int32, v : Float) -> Unit = "(a, i, v) => { a[i] = v; }"
+
+///|
+/// 1 when `a >= b`, else 0, as a value rather than a branch: V8 turns the
+/// boolean-to-number conversion into a flag move, while a conditional would
+/// mispredict on half the splits.
+extern "js" fn ge01(a : Float, b : Float) -> Int32 = "(a, b) => +(a >= b)"
+
+///|
+extern "js" fn FBuf::length(self : FBuf) -> Int32 = "(a) => a.length"

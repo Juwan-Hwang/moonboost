@@ -66,6 +66,8 @@ priv struct Lockstep {
   // `heap_depth` is 0 when the copy is not built.
   heap : Buf
   heap_leaf : FBuf
+  // split value of every heap node (NaN at padded leaves, so they go left)
+  heap_thr : FBuf
   heap_depth : Int32
   heap_size : Int32
   // rows per batch block (see `Model::predict_batch`)
@@ -228,9 +230,18 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
     heap_size > 0 &&
     trees.length().to_int64() * heap_size.to_int64() <=
     HEAP_FACTOR.to_int64() * total.to_int64()
-  let (heap, heap_leaf, heap_depth) = if use_heap {
+  let (heap, heap_leaf, heap_thr, heap_depth) = if use_heap {
     let heap = Buf::new(trees.length() * heap_size)
     let heap_leaf = FBuf::new(trees.length() * heap_size)
+    // short forests compare row values directly: the value copy is cheaper
+    // than ranking every feature once a row takes few steps per feature
+    let heap_thr = FBuf::new(
+      if trees.length() * d_all <= VALUE_STEPS * num_feature {
+        trees.length() * heap_size
+      } else {
+        0
+      },
+    )
     let stack : Array[(Int32, Int32, Int32)] = [] // (old id, heap id, depth)
     for ti, t in trees {
       let b = ti * heap_size
@@ -238,33 +249,39 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
       while stack.pop() is Some((old, h, d)) {
         if t.left[old] != -1 {
           heap.set(b + h, words[ti][old])
+          if heap_thr.length() > 0 {
+            heap_thr.set(b + h, t.value[old])
+          }
           stack.push((t.left[old], 2 * h, d + 1))
           stack.push((t.right[old], 2 * h + 1, d + 1))
         } else if d < d_all {
           // a shallow leaf: the leaf threshold always goes left
           heap.set(b + h, LEAF_THR)
+          if heap_thr.length() > 0 {
+            heap_thr.set(b + h, Float::from_double(0.0 / 0.0))
+          }
           stack.push((old, 2 * h, d + 1))
         } else {
           heap_leaf.set(b + h - heap_size, t.value[old])
         }
       }
     }
-    (heap, heap_leaf, d_all)
+    (heap, heap_leaf, heap_thr, d_all)
   } else {
-    (Buf::new(0), FBuf::new(0), 0)
+    (Buf::new(0), FBuf::new(0), FBuf::new(0), 0)
   }
   Some({
     heap,
     heap_leaf,
+    heap_thr,
     heap_depth,
     heap_size,
-    // a big forest is streamed once per block, so bigger blocks pay off:
-    // heap forests over about 4 MB in V8, compact ones over 2 MB on wasm
-    block: if (
-        heap_depth > 0 &&
-        trees.length().to_int64() * heap_size.to_int64() * 8L > 0x400000L
-      ) ||
-      (STREAM_BLOCK && heap_depth == 0 && total.to_int64() * 8L > 0x200000L) {
+    // heap forests walk rows through cache-sized tree chunks, and a big
+    // compact forest on wasm (over 2 MB) is streamed once per block, so both
+    // take bigger blocks
+    block: if heap_depth > 0 {
+      256
+    } else if STREAM_BLOCK && total.to_int64() * 8L > 0x200000L {
       256
     } else {
       BLOCK
@@ -769,6 +786,277 @@ fn Lockstep::accumulate_heap(
     }
     return
   }
+  if groups == 1 {
+    // trees in cache-sized chunks: rows walk every tree of a chunk with
+    // their margins in locals, so the margin never round-trips memory
+    let chunk = if 8192 / size > 1 { 8192 / size } else { 1 }
+    let mut t0 = 0
+    while t0 < trees {
+      let t1 = if t0 + chunk < trees { t0 + chunk } else { trees }
+      let mut r = 0
+      while r + 3 < n {
+        let r0 = (r + 0) * width
+        let r1 = (r + 1) * width
+        let r2 = (r + 2) * width
+        let r3 = (r + 3) * width
+        let mut m0 = margin.unsafe_get(r + 0)
+        let mut m1 = margin.unsafe_get(r + 1)
+        let mut m2 = margin.unsafe_get(r + 2)
+        let mut m3 = margin.unsafe_get(r + 3)
+        let mut t = t0
+        while t + 3 < t1 {
+          let b0 = (t + 0) * size
+          let b1 = (t + 1) * size
+          let b2 = (t + 2) * size
+          let b3 = (t + 3) * size
+          let mut x0_0 = 1
+          let mut x0_1 = 1
+          let mut x0_2 = 1
+          let mut x0_3 = 1
+          let mut x1_0 = 1
+          let mut x1_1 = 1
+          let mut x1_2 = 1
+          let mut x1_3 = 1
+          let mut x2_0 = 1
+          let mut x2_1 = 1
+          let mut x2_2 = 1
+          let mut x2_3 = 1
+          let mut x3_0 = 1
+          let mut x3_1 = 1
+          let mut x3_2 = 1
+          let mut x3_3 = 1
+          for _ in 0..<d {
+            x0_0 = {
+              let w = heap.get(b0 + x0_0)
+              (x0_0 << 1) |
+              (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x0_1 = {
+              let w = heap.get(b1 + x0_1)
+              (x0_1 << 1) |
+              (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x0_2 = {
+              let w = heap.get(b2 + x0_2)
+              (x0_2 << 1) |
+              (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x0_3 = {
+              let w = heap.get(b3 + x0_3)
+              (x0_3 << 1) |
+              (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x1_0 = {
+              let w = heap.get(b0 + x1_0)
+              (x1_0 << 1) |
+              (((w & 0xFFFF) - ranks.get(r1 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x1_1 = {
+              let w = heap.get(b1 + x1_1)
+              (x1_1 << 1) |
+              (((w & 0xFFFF) - ranks.get(r1 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x1_2 = {
+              let w = heap.get(b2 + x1_2)
+              (x1_2 << 1) |
+              (((w & 0xFFFF) - ranks.get(r1 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x1_3 = {
+              let w = heap.get(b3 + x1_3)
+              (x1_3 << 1) |
+              (((w & 0xFFFF) - ranks.get(r1 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x2_0 = {
+              let w = heap.get(b0 + x2_0)
+              (x2_0 << 1) |
+              (((w & 0xFFFF) - ranks.get(r2 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x2_1 = {
+              let w = heap.get(b1 + x2_1)
+              (x2_1 << 1) |
+              (((w & 0xFFFF) - ranks.get(r2 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x2_2 = {
+              let w = heap.get(b2 + x2_2)
+              (x2_2 << 1) |
+              (((w & 0xFFFF) - ranks.get(r2 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x2_3 = {
+              let w = heap.get(b3 + x2_3)
+              (x2_3 << 1) |
+              (((w & 0xFFFF) - ranks.get(r2 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x3_0 = {
+              let w = heap.get(b0 + x3_0)
+              (x3_0 << 1) |
+              (((w & 0xFFFF) - ranks.get(r3 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x3_1 = {
+              let w = heap.get(b1 + x3_1)
+              (x3_1 << 1) |
+              (((w & 0xFFFF) - ranks.get(r3 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x3_2 = {
+              let w = heap.get(b2 + x3_2)
+              (x3_2 << 1) |
+              (((w & 0xFFFF) - ranks.get(r3 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x3_3 = {
+              let w = heap.get(b3 + x3_3)
+              (x3_3 << 1) |
+              (((w & 0xFFFF) - ranks.get(r3 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+          }
+          m0 = m0 +
+            leaf.get(b0 + x0_0 - size) +
+            leaf.get(b1 + x0_1 - size) +
+            leaf.get(b2 + x0_2 - size) +
+            leaf.get(b3 + x0_3 - size)
+          m1 = m1 +
+            leaf.get(b0 + x1_0 - size) +
+            leaf.get(b1 + x1_1 - size) +
+            leaf.get(b2 + x1_2 - size) +
+            leaf.get(b3 + x1_3 - size)
+          m2 = m2 +
+            leaf.get(b0 + x2_0 - size) +
+            leaf.get(b1 + x2_1 - size) +
+            leaf.get(b2 + x2_2 - size) +
+            leaf.get(b3 + x2_3 - size)
+          m3 = m3 +
+            leaf.get(b0 + x3_0 - size) +
+            leaf.get(b1 + x3_1 - size) +
+            leaf.get(b2 + x3_2 - size) +
+            leaf.get(b3 + x3_3 - size)
+          t += 4
+        }
+        while t < t1 {
+          let b0 = (t + 0) * size
+          let mut x0_0 = 1
+          let mut x1_0 = 1
+          let mut x2_0 = 1
+          let mut x3_0 = 1
+          for _ in 0..<d {
+            x0_0 = {
+              let w = heap.get(b0 + x0_0)
+              (x0_0 << 1) |
+              (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x1_0 = {
+              let w = heap.get(b0 + x1_0)
+              (x1_0 << 1) |
+              (((w & 0xFFFF) - ranks.get(r1 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x2_0 = {
+              let w = heap.get(b0 + x2_0)
+              (x2_0 << 1) |
+              (((w & 0xFFFF) - ranks.get(r2 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x3_0 = {
+              let w = heap.get(b0 + x3_0)
+              (x3_0 << 1) |
+              (((w & 0xFFFF) - ranks.get(r3 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+          }
+          m0 = m0 + leaf.get(b0 + x0_0 - size)
+          m1 = m1 + leaf.get(b0 + x1_0 - size)
+          m2 = m2 + leaf.get(b0 + x2_0 - size)
+          m3 = m3 + leaf.get(b0 + x3_0 - size)
+          t += 1
+        }
+        margin.unsafe_set(r + 0, m0)
+        margin.unsafe_set(r + 1, m1)
+        margin.unsafe_set(r + 2, m2)
+        margin.unsafe_set(r + 3, m3)
+        r += 4
+      }
+      while r + 0 < n {
+        let r0 = (r + 0) * width
+        let mut m0 = margin.unsafe_get(r + 0)
+        let mut t = t0
+        while t + 3 < t1 {
+          let b0 = (t + 0) * size
+          let b1 = (t + 1) * size
+          let b2 = (t + 2) * size
+          let b3 = (t + 3) * size
+          let mut x0_0 = 1
+          let mut x0_1 = 1
+          let mut x0_2 = 1
+          let mut x0_3 = 1
+          for _ in 0..<d {
+            x0_0 = {
+              let w = heap.get(b0 + x0_0)
+              (x0_0 << 1) |
+              (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x0_1 = {
+              let w = heap.get(b1 + x0_1)
+              (x0_1 << 1) |
+              (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x0_2 = {
+              let w = heap.get(b2 + x0_2)
+              (x0_2 << 1) |
+              (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+            x0_3 = {
+              let w = heap.get(b3 + x0_3)
+              (x0_3 << 1) |
+              (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+          }
+          m0 = m0 +
+            leaf.get(b0 + x0_0 - size) +
+            leaf.get(b1 + x0_1 - size) +
+            leaf.get(b2 + x0_2 - size) +
+            leaf.get(b3 + x0_3 - size)
+          t += 4
+        }
+        while t < t1 {
+          let b0 = (t + 0) * size
+          let mut x0_0 = 1
+          for _ in 0..<d {
+            x0_0 = {
+              let w = heap.get(b0 + x0_0)
+              (x0_0 << 1) |
+              (((w & 0xFFFF) - ranks.get(r0 + (w >> 16))).reinterpret_as_uint() >>
+              31).reinterpret_as_int()
+            }
+          }
+          m0 = m0 + leaf.get(b0 + x0_0 - size)
+          t += 1
+        }
+        margin.unsafe_set(r + 0, m0)
+        r += 1
+      }
+      t0 = t1
+    }
+    return
+  }
+
   for t = 0; t < trees; {
     let ba = t * size
     let ga = tree_group[t]
@@ -978,4 +1266,311 @@ fn bucket_of(x : Double, lo : Double, scale : Double, top : Int32) -> Int32 {
 /// The threshold value whose `float_key` is `k`.
 fn key_value(k : Int32) -> Float {
   Float::reinterpret_from_int(if k >= 0 { k } else { -k | (1 << 31) })
+}
+
+///|
+/// Row values for the heap walk: slot `2f` holds feature `f` with a missing
+/// value as -inf (always left), slot `2f + 1` with it as +inf (always right).
+fn Lockstep::values_block(
+  self : Lockstep,
+  data : FixedArray[Float],
+  cols : Int32,
+  start : Int32,
+  n : Int32,
+  out : FBuf,
+) -> Unit {
+  let nf = self.num_feature
+  let width = 2 * nf
+  let lo = Float::from_double(-1.0 / 0.0)
+  let hi = Float::from_double(1.0 / 0.0)
+  let shared = if cols < nf { cols } else { nf }
+  for r in 0..<n {
+    let o = r * width
+    let at = (start + r) * cols
+    for f in 0..<shared {
+      let x = data[at + f]
+      if x.is_nan() {
+        out.set(o + 2 * f, lo)
+        out.set(o + 2 * f + 1, hi)
+      } else {
+        out.set(o + 2 * f, x)
+        out.set(o + 2 * f + 1, x)
+      }
+    }
+    for f in shared..<nf {
+      out.set(o + 2 * f, lo)
+      out.set(o + 2 * f + 1, hi)
+    }
+  }
+}
+
+///|
+/// `accumulate_heap` for one output group, comparing row values against the
+/// split values directly (`x >= split` goes right, as in XGBoost). Trees are
+/// walked in cache-sized chunks; rows walk every tree of a chunk with their
+/// margins in locals.
+fn Lockstep::accumulate_values(
+  self : Lockstep,
+  vals : FBuf,
+  n : Int32,
+  margin : FixedArray[Float],
+) -> Unit {
+  let width = 2 * self.num_feature
+  let heap = self.heap
+  let thr = self.heap_thr
+  let leaf = self.heap_leaf
+  let d = self.heap_depth
+  let size = self.heap_size
+  let trees = self.roots.length()
+  let chunk = if 8192 / size > 1 { 8192 / size } else { 1 }
+  let mut t0 = 0
+  while t0 < trees {
+    let t1 = if t0 + chunk < trees { t0 + chunk } else { trees }
+    let mut r = 0
+    while r + 3 < n {
+      let r0 = (r + 0) * width
+      let r1 = (r + 1) * width
+      let r2 = (r + 2) * width
+      let r3 = (r + 3) * width
+      let mut m0 = margin.unsafe_get(r + 0)
+      let mut m1 = margin.unsafe_get(r + 1)
+      let mut m2 = margin.unsafe_get(r + 2)
+      let mut m3 = margin.unsafe_get(r + 3)
+      let mut t = t0
+      while t + 3 < t1 {
+        let b0 = (t + 0) * size
+        let b1 = (t + 1) * size
+        let b2 = (t + 2) * size
+        let b3 = (t + 3) * size
+        let mut x0_0 = 1
+        let mut x0_1 = 1
+        let mut x0_2 = 1
+        let mut x0_3 = 1
+        let mut x1_0 = 1
+        let mut x1_1 = 1
+        let mut x1_2 = 1
+        let mut x1_3 = 1
+        let mut x2_0 = 1
+        let mut x2_1 = 1
+        let mut x2_2 = 1
+        let mut x2_3 = 1
+        let mut x3_0 = 1
+        let mut x3_1 = 1
+        let mut x3_2 = 1
+        let mut x3_3 = 1
+        for _ in 0..<d {
+          x0_0 = {
+            let w = heap.get(b0 + x0_0)
+            let c = thr.get(b0 + x0_0)
+            (x0_0 << 1) | ge01(vals.get(r0 + (w >> 16)), c)
+          }
+          x0_1 = {
+            let w = heap.get(b1 + x0_1)
+            let c = thr.get(b1 + x0_1)
+            (x0_1 << 1) | ge01(vals.get(r0 + (w >> 16)), c)
+          }
+          x0_2 = {
+            let w = heap.get(b2 + x0_2)
+            let c = thr.get(b2 + x0_2)
+            (x0_2 << 1) | ge01(vals.get(r0 + (w >> 16)), c)
+          }
+          x0_3 = {
+            let w = heap.get(b3 + x0_3)
+            let c = thr.get(b3 + x0_3)
+            (x0_3 << 1) | ge01(vals.get(r0 + (w >> 16)), c)
+          }
+          x1_0 = {
+            let w = heap.get(b0 + x1_0)
+            let c = thr.get(b0 + x1_0)
+            (x1_0 << 1) | ge01(vals.get(r1 + (w >> 16)), c)
+          }
+          x1_1 = {
+            let w = heap.get(b1 + x1_1)
+            let c = thr.get(b1 + x1_1)
+            (x1_1 << 1) | ge01(vals.get(r1 + (w >> 16)), c)
+          }
+          x1_2 = {
+            let w = heap.get(b2 + x1_2)
+            let c = thr.get(b2 + x1_2)
+            (x1_2 << 1) | ge01(vals.get(r1 + (w >> 16)), c)
+          }
+          x1_3 = {
+            let w = heap.get(b3 + x1_3)
+            let c = thr.get(b3 + x1_3)
+            (x1_3 << 1) | ge01(vals.get(r1 + (w >> 16)), c)
+          }
+          x2_0 = {
+            let w = heap.get(b0 + x2_0)
+            let c = thr.get(b0 + x2_0)
+            (x2_0 << 1) | ge01(vals.get(r2 + (w >> 16)), c)
+          }
+          x2_1 = {
+            let w = heap.get(b1 + x2_1)
+            let c = thr.get(b1 + x2_1)
+            (x2_1 << 1) | ge01(vals.get(r2 + (w >> 16)), c)
+          }
+          x2_2 = {
+            let w = heap.get(b2 + x2_2)
+            let c = thr.get(b2 + x2_2)
+            (x2_2 << 1) | ge01(vals.get(r2 + (w >> 16)), c)
+          }
+          x2_3 = {
+            let w = heap.get(b3 + x2_3)
+            let c = thr.get(b3 + x2_3)
+            (x2_3 << 1) | ge01(vals.get(r2 + (w >> 16)), c)
+          }
+          x3_0 = {
+            let w = heap.get(b0 + x3_0)
+            let c = thr.get(b0 + x3_0)
+            (x3_0 << 1) | ge01(vals.get(r3 + (w >> 16)), c)
+          }
+          x3_1 = {
+            let w = heap.get(b1 + x3_1)
+            let c = thr.get(b1 + x3_1)
+            (x3_1 << 1) | ge01(vals.get(r3 + (w >> 16)), c)
+          }
+          x3_2 = {
+            let w = heap.get(b2 + x3_2)
+            let c = thr.get(b2 + x3_2)
+            (x3_2 << 1) | ge01(vals.get(r3 + (w >> 16)), c)
+          }
+          x3_3 = {
+            let w = heap.get(b3 + x3_3)
+            let c = thr.get(b3 + x3_3)
+            (x3_3 << 1) | ge01(vals.get(r3 + (w >> 16)), c)
+          }
+        }
+        m0 = m0 +
+          leaf.get(b0 + x0_0 - size) +
+          leaf.get(b1 + x0_1 - size) +
+          leaf.get(b2 + x0_2 - size) +
+          leaf.get(b3 + x0_3 - size)
+        m1 = m1 +
+          leaf.get(b0 + x1_0 - size) +
+          leaf.get(b1 + x1_1 - size) +
+          leaf.get(b2 + x1_2 - size) +
+          leaf.get(b3 + x1_3 - size)
+        m2 = m2 +
+          leaf.get(b0 + x2_0 - size) +
+          leaf.get(b1 + x2_1 - size) +
+          leaf.get(b2 + x2_2 - size) +
+          leaf.get(b3 + x2_3 - size)
+        m3 = m3 +
+          leaf.get(b0 + x3_0 - size) +
+          leaf.get(b1 + x3_1 - size) +
+          leaf.get(b2 + x3_2 - size) +
+          leaf.get(b3 + x3_3 - size)
+        t += 4
+      }
+      while t < t1 {
+        let b0 = (t + 0) * size
+        let mut x0_0 = 1
+        let mut x1_0 = 1
+        let mut x2_0 = 1
+        let mut x3_0 = 1
+        for _ in 0..<d {
+          x0_0 = {
+            let w = heap.get(b0 + x0_0)
+            let c = thr.get(b0 + x0_0)
+            (x0_0 << 1) | ge01(vals.get(r0 + (w >> 16)), c)
+          }
+          x1_0 = {
+            let w = heap.get(b0 + x1_0)
+            let c = thr.get(b0 + x1_0)
+            (x1_0 << 1) | ge01(vals.get(r1 + (w >> 16)), c)
+          }
+          x2_0 = {
+            let w = heap.get(b0 + x2_0)
+            let c = thr.get(b0 + x2_0)
+            (x2_0 << 1) | ge01(vals.get(r2 + (w >> 16)), c)
+          }
+          x3_0 = {
+            let w = heap.get(b0 + x3_0)
+            let c = thr.get(b0 + x3_0)
+            (x3_0 << 1) | ge01(vals.get(r3 + (w >> 16)), c)
+          }
+        }
+        m0 = m0 + leaf.get(b0 + x0_0 - size)
+        m1 = m1 + leaf.get(b0 + x1_0 - size)
+        m2 = m2 + leaf.get(b0 + x2_0 - size)
+        m3 = m3 + leaf.get(b0 + x3_0 - size)
+        t += 1
+      }
+      margin.unsafe_set(r + 0, m0)
+      margin.unsafe_set(r + 1, m1)
+      margin.unsafe_set(r + 2, m2)
+      margin.unsafe_set(r + 3, m3)
+      r += 4
+    }
+    while r + 0 < n {
+      let r0 = (r + 0) * width
+      let mut m0 = margin.unsafe_get(r + 0)
+      let mut t = t0
+      while t + 3 < t1 {
+        let b0 = (t + 0) * size
+        let b1 = (t + 1) * size
+        let b2 = (t + 2) * size
+        let b3 = (t + 3) * size
+        let mut x0_0 = 1
+        let mut x0_1 = 1
+        let mut x0_2 = 1
+        let mut x0_3 = 1
+        for _ in 0..<d {
+          x0_0 = {
+            let w = heap.get(b0 + x0_0)
+            let c = thr.get(b0 + x0_0)
+            (x0_0 << 1) | ge01(vals.get(r0 + (w >> 16)), c)
+          }
+          x0_1 = {
+            let w = heap.get(b1 + x0_1)
+            let c = thr.get(b1 + x0_1)
+            (x0_1 << 1) | ge01(vals.get(r0 + (w >> 16)), c)
+          }
+          x0_2 = {
+            let w = heap.get(b2 + x0_2)
+            let c = thr.get(b2 + x0_2)
+            (x0_2 << 1) | ge01(vals.get(r0 + (w >> 16)), c)
+          }
+          x0_3 = {
+            let w = heap.get(b3 + x0_3)
+            let c = thr.get(b3 + x0_3)
+            (x0_3 << 1) | ge01(vals.get(r0 + (w >> 16)), c)
+          }
+        }
+        m0 = m0 +
+          leaf.get(b0 + x0_0 - size) +
+          leaf.get(b1 + x0_1 - size) +
+          leaf.get(b2 + x0_2 - size) +
+          leaf.get(b3 + x0_3 - size)
+        t += 4
+      }
+      while t < t1 {
+        let b0 = (t + 0) * size
+        let mut x0_0 = 1
+        for _ in 0..<d {
+          x0_0 = {
+            let w = heap.get(b0 + x0_0)
+            let c = thr.get(b0 + x0_0)
+            (x0_0 << 1) | ge01(vals.get(r0 + (w >> 16)), c)
+          }
+        }
+        m0 = m0 + leaf.get(b0 + x0_0 - size)
+        t += 1
+      }
+      margin.unsafe_set(r + 0, m0)
+      r += 1
+    }
+    t0 = t1
+  }
+}
+
+///|
+/// Heap forests with at most this many tree levels per feature walk row
+/// values (`accumulate_values`) instead of ranks.
+const VALUE_STEPS : Int32 = 32
+
+///|
+/// Whether batches walk row values against split values.
+fn Lockstep::walks_values(self : Lockstep) -> Bool {
+  self.heap_thr.length() > 0
 }

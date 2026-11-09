@@ -36,3 +36,18 @@ fn FBuf::get(self : FBuf, i : Int32) -> Float {
 fn FBuf::set(self : FBuf, i : Int32, v : Float) -> Unit {
   self.0.unsafe_set(i, v)
 }
+
+///|
+/// 1 when `a >= b`, else 0.
+fn ge01(a : Float, b : Float) -> Int32 {
+  if a >= b {
+    1
+  } else {
+    0
+  }
+}
+
+///|
+fn FBuf::length(self : FBuf) -> Int32 {
+  self.0.length()
+}

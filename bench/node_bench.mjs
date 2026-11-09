@@ -20,10 +20,16 @@ for (const name of ["small", "medium", "large"]) {
   mb.predict(model, rows[0]);
   const first = performance.now() - t;
 
-  mb.predict_batch(model, flat, cols); // warm up
-  t = performance.now();
+  // best of five timed batches after a warm-up, as the native and XGBoost
+  // benchmarks report
   const out = mb.predict_batch(model, flat, cols);
-  const batch = ((performance.now() - t) * 1000) / rows.length;
+  let best = Infinity;
+  for (let k = 0; k < 5; k++) {
+    t = performance.now();
+    mb.predict_batch(model, flat, cols);
+    best = Math.min(best, performance.now() - t);
+  }
+  const batch = (best * 1000) / rows.length;
 
   const n = 2000;
   for (let i = 0; i < n; i++) mb.predict(model, rows[i % rows.length]); // warm up

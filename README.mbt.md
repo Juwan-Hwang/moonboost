@@ -87,9 +87,9 @@ better. XGBoost is timed through its C API (`XGBoosterPredictFromDense`,
 
 | Model | moonboost native | moonboost JS (Node 22) | moonboost wasm / wasm-gc (moonrun) | XGBoost 3.4.1 C API |
 |---|---|---|---|---|
-| 100 trees, depth 4 | 0.46 | 2.0 | 0.83 / 0.87 | 1.00 |
-| 500 trees, depth 8 | 3.3 | 9.7 | 4.6 / 6.6 | 12.8 |
-| 1000 trees, depth 10 | 9.2 | 24.0 | 11.5 / 14.0 | 35.0 |
+| 100 trees, depth 4 | 0.46 | 0.91 | 0.77 / 0.83 | 1.00 |
+| 500 trees, depth 8 | 3.2 | 5.4 | 4.4 / 5.4 | 10.4 |
+| 1000 trees, depth 10 | 7.4 | 12.8 | 10.4 / 12.9 | 29.9 |
 
 One row per call (rows predicted one at a time, µs per row), which is what
 an online caller pays. For XGBoost this is one `XGBoosterPredictFromDense`
@@ -97,9 +97,9 @@ call per row, so its per-call overhead is included.
 
 | Model | moonboost native | moonboost JS (Node 22) | moonboost wasm / wasm-gc (moonrun) | XGBoost 3.4.1 C API |
 |---|---|---|---|---|
-| 100 trees, depth 4 | 0.8 | 3.6 | 2.5 / 1.9 | 12.5 |
-| 500 trees, depth 8 | 5.4 | 13.3 | 14.6 / 9.8 | 106 |
-| 1000 trees, depth 10 | 18.9 | 72 | 52 / 26 | 439 |
+| 100 trees, depth 4 | 0.7 | 3.0 | 2.1 / 1.6 | 12.2 |
+| 500 trees, depth 8 | 4.8 | 10.8 | 11.2 / 8.7 | 57 |
+| 1000 trees, depth 10 | 12.4 | 30 | 35 / 22 | 154 |
 
 Loading the 1000-tree model (a 19 MB JSON file) takes 325 ms native and
 360 ms in Node, where the JS build parses with the engine's own
@@ -137,15 +137,27 @@ How the batch path works (`lockstep.mbt`):
   cache misses overlap, instead of using the block machinery.
 - **Pointer-free trees on JS.** The JS build pads every tree to the forest's
   depth and stores it as an implicit heap (children of node `h` at `2h` and
-  `2h + 1`; a shallow leaf is extended by nodes that always go right), with
+  `2h + 1`; a shallow leaf is extended by nodes that always go left), with
   split words in an `Int32Array` and leaves in a `Float32Array`. A step then
   reads no child index, which V8 rewards; native and wasm keep the compact
-  layout, which is faster there. A heap forest over 4 MB is walked 256 rows
-  at a time instead of 64, so it streams through the cache fewer times.
+  layout, which is faster there.
+- **Tree chunks, margins in registers (JS).** For single-output models the
+  heap forest is cut into chunks of about 32 KB. Four rows walk four trees of
+  a chunk at once and carry on through the whole chunk with their running
+  sums in locals, so the margin never goes back to memory and the chunk
+  stays in L1 while the 256 rows of a block pass through it.
+- **Values instead of ranks for short forests (JS).** When the forest takes
+  few steps per feature (at most 32 tree levels per feature, like the
+  100-tree model), ranking every feature costs more than the walk. Such
+  forests compare the float32 row value with the split value directly. A
+  missing value is stored as -inf in the slot read by default-left splits and
+  +inf in the default-right slot, and padded heap nodes split on NaN, so they
+  always go left. The comparison becomes a 0/1 value with `+(a >= b)`,
+  which V8 compiles without a branch.
 
 Leaves are still added in tree order in float32, which is what keeps the
 results identical. Models with categorical splits use the verified kernel.
-The JS bundle minified with esbuild is 149 KB, 47.3 KB gzipped, with no other runtime.
+The JS bundle minified with esbuild is 160 KB, 50.6 KB gzipped, with no other runtime.
 
 ## Usage
 

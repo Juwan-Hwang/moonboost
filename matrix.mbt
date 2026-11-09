@@ -124,10 +124,17 @@ pub fn Model::predict_batch(self : Model, m : DenseMatrix) -> Array[Float] {
     None => Buf::new(0)
   }
   let idx = Buf::new(2 * block)
+  let vals = match self.fast {
+    Some(fast) if fast.walks_values() => FBuf::new(block * 2 * fast.num_feature)
+    _ => FBuf::new(0)
+  }
   for start = 0; start < m.rows; start = start + block {
     let n = if m.rows - start < block { m.rows - start } else { block }
     margin.fill(self.base_margin)
-    if self.fast is Some(fast) {
+    if self.fast is Some(fast) && fast.walks_values() && groups == 1 {
+      fast.values_block(m.data, m.cols, start, n, vals)
+      fast.accumulate_values(vals, n, margin)
+    } else if self.fast is Some(fast) {
       fast.ranks_block(m.data, m.cols, start, n, ranks)
       fast.accumulate(self.tree_group, groups, ranks, n, idx, margin)
     } else {

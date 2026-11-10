@@ -449,7 +449,7 @@ pub fn LightGBMModel::predict_batch(
   let out = Array::make(data.rows * k, 0.0)
   match self.fast {
     Some(f) if f.heap_depth > 0 && k == 1 => {
-      let block = 64
+      let block = 256
       let vals = FixedArray::make(block * f.width(), (0.0 : Float))
       let m = FixedArray::make(block, 0.0)
       let row = [0.0]
@@ -472,7 +472,9 @@ pub fn LightGBMModel::predict_batch(
       }
     }
     Some(f) => {
-      let block = 64
+      // rank blocks of 256 rows reuse each tree from cache four times as
+      // long; value blocks are eight bytes a slot and stay at 64 rows
+      let block = if f.by_value { 64 } else { 256 }
       let w = f.width()
       let ranks = FixedArray::make(if f.by_value { 0 } else { block * w }, 0)
       let values = FixedArray::make(if f.by_value { block * w } else { 0 }, 0.0)

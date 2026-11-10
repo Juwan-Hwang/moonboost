@@ -283,9 +283,9 @@ through its Python `predict` on the whole batch (`n_jobs=1`);
 
 | Model | moonboost native | lleaves |
 |---|---|---|
-| 100 trees, depth 4 | 0.66 | 0.96 |
-| 500 trees, depth 8 | 3.9 | 12.9 |
-| 1000 trees, depth 10 | 29 | not measured (compiling took over 20 minutes) |
+| 100 trees, depth 4 | 0.38 | 0.96 |
+| 500 trees, depth 8 | 3.7 | 12.9 |
+| 1000 trees, depth 10 | 13.5 | not measured (compiling took over 20 minutes) |
 | equal to LightGBM | 10,000 / 10,000 | 5,262 and 5,284 / 10,000 |
 
 moonboost needs no compile step: a LightGBM model loads into the same
@@ -295,7 +295,36 @@ compares (a missing value or zero that a split sends one way by rule
 becomes ±infinity), trees up to 10 levels are laid out as implicit heaps,
 and float inputs walk a packed copy where each double threshold is replaced
 by the largest float not above it, which decides `x <= t` exactly for any
-float `x`. Larger forests compare integer ranks of the values instead.
+float `x`. Larger forests compare integer ranks of the values instead, each
+node packed into one 64-bit word (child, slot and threshold rank), eight
+rows walking each tree side by side over blocks of 256 rows.
+
+### On x86-64
+
+The same benchmarks on a 4-vCPU AMD EPYC VM (Debian 13, glibc 2.41, gcc
+14.2), every engine pinned to one core in one session, best of three. This
+machine also runs Intel oneDAL (scikit-learn-intelex 2026.2,
+`daal4py.mb.convert_model`), which has no ARM build; it is timed through its
+Python `predict_proba` on the whole batch (`bench/onedal_bench.py`), as LightGBM and lleaves are through their `predict`.
+µs per row in batch:
+
+| XGBoost model | moonboost native | oneDAL | XGBoost 3.4.1 C API | TL2cgen |
+|---|---|---|---|---|
+| 100 trees, depth 4 | 0.30 | 0.52 | 0.86 | 1.60 |
+| 500 trees, depth 8 | 4.4 | 5.1 | 8.8 | 28.7 |
+| 1000 trees, depth 10 | 10.6 | 13.2 | 25.7 | not measured |
+| equal to XGBoost | 10,000 / 10,000 | 5,156 to 5,852 / 10,000 | | 6,355 to 7,121 / 10,000 |
+
+| LightGBM model | moonboost native | oneDAL | LightGBM 4.7.0 | lleaves |
+|---|---|---|---|---|
+| 100 trees, depth 4 | 0.34 | 0.53 | 3.1 | 0.72 |
+| 500 trees, depth 8 | 3.5 | 5.1 | 39.3 | 14.0 |
+| 1000 trees, depth 10 | 10.6 | 14.5 | 127.5 | not measured |
+| equal to LightGBM | 10,000 / 10,000 | 3,911 to 4,972 / 10,000 | | 5,262 and 5,284 / 10,000 |
+
+oneDAL's differences from the original libraries are at most 2.2e-7. Every
+moonboost prediction on this machine matched XGBoost and LightGBM bit for
+bit, as on ARM. lleaves took over nine minutes to compile the 500-tree model.
 
 ## Usage
 

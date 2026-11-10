@@ -13,3 +13,7 @@ fn lgb_exp(x : Double) -> Double {
     c_exp(x)
   }
 }
+
+///|
+/// Walk LightGBM ranks through packed 64-bit nodes.
+const LGB_PACKED : Bool = true

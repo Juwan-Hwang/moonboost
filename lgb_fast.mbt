@@ -1,10 +1,10 @@
 ///|
 /// Rank of a value that every split sends right.
-const LGB_HIGH : Int32 = 0x3FFFFFFF
+const LGB_HIGH : Int32 = 0xFFFE
 
 ///|
 /// Threshold rank of a self-looping leaf: no rank exceeds it.
-const LGB_LEAF : Int32 = 0x7FFFFFFF
+const LGB_LEAF : Int32 = 0xFFFF
 
 ///|
 /// Rank slots per feature. LightGBM decides a numerical split by the node's
@@ -34,6 +34,8 @@ const LGB_SLOTS : Int32 = 5
 priv struct LgbFast {
   left : FixedArray[Int32]
   slot : FixedArray[Int32]
+  // each node as `(left << 32) | (slot << 16) | rank`, one load per step
+  node : FixedArray[Int64]
   rank : FixedArray[Int32]
   // threshold of each split (+inf at leaves), for walking by value
   thr : FixedArray[Double]
@@ -99,6 +101,10 @@ fn LgbFast::build(
     c.dedup()
     cuts.push_iter(c.iter())
     cut_start[f + 1] = cuts.length()
+    // ranks and threshold ranks must stay below `LGB_HIGH` (16 bits)
+    if c.length() >= LGB_HIGH {
+      return None
+    }
   }
   let cuts = FixedArray::from_array(cuts)
   let zero_rank = FixedArray::make(num_feature, 0)
@@ -235,7 +241,14 @@ fn LgbFast::build(
     let c = f32_down(heap_thr[i])
     (c.reinterpret_as_int().to_int64() << 32) | heap_slot[i].to_int64()
   })
+  if slot_feature.length() > 0xFFFF {
+    return None
+  }
+  let node = FixedArray::makei(left.length(), i => {
+    (left[i].to_int64() << 32) | (slot[i].to_int64() << 16) | rank[i].to_int64()
+  })
   Some({
+    node,
     fheap,
     heap_slot,
     heap_thr,
@@ -439,6 +452,7 @@ fn LgbFast::accumulate_ranks(
   let left = self.left
   let slot = self.slot
   let rank = self.rank
+  let node = self.node
   let lv = self.leaf_value
   let groups = self.groups
   let trees = self.roots.length()
@@ -451,6 +465,94 @@ fn LgbFast::accumulate_ranks(
     let d = self.depth.unsafe_get(t)
     let g = t % groups
     let mut r = 0
+    if LGB_PACKED {
+      while r + 8 <= n {
+        let b0 = r * w
+        let b1 = b0 + w
+        let b2 = b1 + w
+        let b3 = b2 + w
+        let b4 = b3 + w
+        let b5 = b4 + w
+        let b6 = b5 + w
+        let b7 = b6 + w
+        let mut i0 = root
+        let mut i1 = root
+        let mut i2 = root
+        let mut i3 = root
+        let mut i4 = root
+        let mut i5 = root
+        let mut i6 = root
+        let mut i7 = root
+        for _ in 0..<d {
+          let n0 = node.unsafe_get(i0)
+          let n1 = node.unsafe_get(i1)
+          let n2 = node.unsafe_get(i2)
+          let n3 = node.unsafe_get(i3)
+          let n4 = node.unsafe_get(i4)
+          let n5 = node.unsafe_get(i5)
+          let n6 = node.unsafe_get(i6)
+          let n7 = node.unsafe_get(i7)
+          let w0 = n0.to_int()
+          let w1 = n1.to_int()
+          let w2 = n2.to_int()
+          let w3 = n3.to_int()
+          let w4 = n4.to_int()
+          let w5 = n5.to_int()
+          let w6 = n6.to_int()
+          let w7 = n7.to_int()
+          i0 = (n0 >> 32).to_int() +
+            lgb_gt(ranks.unsafe_get(b0 + (w0 >> 16)), w0 & 0xFFFF)
+          i1 = (n1 >> 32).to_int() +
+            lgb_gt(ranks.unsafe_get(b1 + (w1 >> 16)), w1 & 0xFFFF)
+          i2 = (n2 >> 32).to_int() +
+            lgb_gt(ranks.unsafe_get(b2 + (w2 >> 16)), w2 & 0xFFFF)
+          i3 = (n3 >> 32).to_int() +
+            lgb_gt(ranks.unsafe_get(b3 + (w3 >> 16)), w3 & 0xFFFF)
+          i4 = (n4 >> 32).to_int() +
+            lgb_gt(ranks.unsafe_get(b4 + (w4 >> 16)), w4 & 0xFFFF)
+          i5 = (n5 >> 32).to_int() +
+            lgb_gt(ranks.unsafe_get(b5 + (w5 >> 16)), w5 & 0xFFFF)
+          i6 = (n6 >> 32).to_int() +
+            lgb_gt(ranks.unsafe_get(b6 + (w6 >> 16)), w6 & 0xFFFF)
+          i7 = (n7 >> 32).to_int() +
+            lgb_gt(ranks.unsafe_get(b7 + (w7 >> 16)), w7 & 0xFFFF)
+        }
+        let m = r * groups + g
+        margin.unsafe_set(
+          m + 0 * groups,
+          margin.unsafe_get(m + 0 * groups) + lv.unsafe_get(i0),
+        )
+        margin.unsafe_set(
+          m + 1 * groups,
+          margin.unsafe_get(m + 1 * groups) + lv.unsafe_get(i1),
+        )
+        margin.unsafe_set(
+          m + 2 * groups,
+          margin.unsafe_get(m + 2 * groups) + lv.unsafe_get(i2),
+        )
+        margin.unsafe_set(
+          m + 3 * groups,
+          margin.unsafe_get(m + 3 * groups) + lv.unsafe_get(i3),
+        )
+        margin.unsafe_set(
+          m + 4 * groups,
+          margin.unsafe_get(m + 4 * groups) + lv.unsafe_get(i4),
+        )
+        margin.unsafe_set(
+          m + 5 * groups,
+          margin.unsafe_get(m + 5 * groups) + lv.unsafe_get(i5),
+        )
+        margin.unsafe_set(
+          m + 6 * groups,
+          margin.unsafe_get(m + 6 * groups) + lv.unsafe_get(i6),
+        )
+        margin.unsafe_set(
+          m + 7 * groups,
+          margin.unsafe_get(m + 7 * groups) + lv.unsafe_get(i7),
+        )
+        r += 8
+      }
+    }
     while r + 4 <= n {
       let b0 = r * w
       let b1 = b0 + w
@@ -460,19 +562,40 @@ fn LgbFast::accumulate_ranks(
       let mut i1 = root
       let mut i2 = root
       let mut i3 = root
-      for _ in 0..<d {
-        let s0 = slot.unsafe_get(i0)
-        let s1 = slot.unsafe_get(i1)
-        let s2 = slot.unsafe_get(i2)
-        let s3 = slot.unsafe_get(i3)
-        let k0 = rank.unsafe_get(i0)
-        let k1 = rank.unsafe_get(i1)
-        let k2 = rank.unsafe_get(i2)
-        let k3 = rank.unsafe_get(i3)
-        i0 = left.unsafe_get(i0) + lgb_gt(ranks.unsafe_get(b0 + s0), k0)
-        i1 = left.unsafe_get(i1) + lgb_gt(ranks.unsafe_get(b1 + s1), k1)
-        i2 = left.unsafe_get(i2) + lgb_gt(ranks.unsafe_get(b2 + s2), k2)
-        i3 = left.unsafe_get(i3) + lgb_gt(ranks.unsafe_get(b3 + s3), k3)
+      if LGB_PACKED {
+        for _ in 0..<d {
+          let n0 = node.unsafe_get(i0)
+          let n1 = node.unsafe_get(i1)
+          let n2 = node.unsafe_get(i2)
+          let n3 = node.unsafe_get(i3)
+          let w0 = n0.to_int()
+          let w1 = n1.to_int()
+          let w2 = n2.to_int()
+          let w3 = n3.to_int()
+          i0 = (n0 >> 32).to_int() +
+            lgb_gt(ranks.unsafe_get(b0 + (w0 >> 16)), w0 & 0xFFFF)
+          i1 = (n1 >> 32).to_int() +
+            lgb_gt(ranks.unsafe_get(b1 + (w1 >> 16)), w1 & 0xFFFF)
+          i2 = (n2 >> 32).to_int() +
+            lgb_gt(ranks.unsafe_get(b2 + (w2 >> 16)), w2 & 0xFFFF)
+          i3 = (n3 >> 32).to_int() +
+            lgb_gt(ranks.unsafe_get(b3 + (w3 >> 16)), w3 & 0xFFFF)
+        }
+      } else {
+        for _ in 0..<d {
+          let s0 = slot.unsafe_get(i0)
+          let s1 = slot.unsafe_get(i1)
+          let s2 = slot.unsafe_get(i2)
+          let s3 = slot.unsafe_get(i3)
+          let k0 = rank.unsafe_get(i0)
+          let k1 = rank.unsafe_get(i1)
+          let k2 = rank.unsafe_get(i2)
+          let k3 = rank.unsafe_get(i3)
+          i0 = left.unsafe_get(i0) + lgb_gt(ranks.unsafe_get(b0 + s0), k0)
+          i1 = left.unsafe_get(i1) + lgb_gt(ranks.unsafe_get(b1 + s1), k1)
+          i2 = left.unsafe_get(i2) + lgb_gt(ranks.unsafe_get(b2 + s2), k2)
+          i3 = left.unsafe_get(i3) + lgb_gt(ranks.unsafe_get(b3 + s3), k3)
+        }
       }
       let m = r * groups + g
       margin.unsafe_set(m, margin.unsafe_get(m) + lv.unsafe_get(i0))
@@ -512,10 +635,81 @@ fn LgbFast::single_ranks(
   let left = self.left
   let slot = self.slot
   let rank = self.rank
+  let node = self.node
   let lv = self.leaf_value
   let groups = self.groups
   let trees = self.roots.length()
   let mut t = 0
+  if LGB_PACKED {
+    while t + 8 <= trees {
+      let mut i0 = self.roots.unsafe_get(t + 0)
+      let mut i1 = self.roots.unsafe_get(t + 1)
+      let mut i2 = self.roots.unsafe_get(t + 2)
+      let mut i3 = self.roots.unsafe_get(t + 3)
+      let mut i4 = self.roots.unsafe_get(t + 4)
+      let mut i5 = self.roots.unsafe_get(t + 5)
+      let mut i6 = self.roots.unsafe_get(t + 6)
+      let mut i7 = self.roots.unsafe_get(t + 7)
+      let mut d = self.depth.unsafe_get(t)
+      for j in 1..<8 {
+        let dj = self.depth.unsafe_get(t + j)
+        if dj > d {
+          d = dj
+        }
+      }
+      for _ in 0..<d {
+        let n0 = node.unsafe_get(i0)
+        let n1 = node.unsafe_get(i1)
+        let n2 = node.unsafe_get(i2)
+        let n3 = node.unsafe_get(i3)
+        let n4 = node.unsafe_get(i4)
+        let n5 = node.unsafe_get(i5)
+        let n6 = node.unsafe_get(i6)
+        let n7 = node.unsafe_get(i7)
+        let w0 = n0.to_int()
+        let w1 = n1.to_int()
+        let w2 = n2.to_int()
+        let w3 = n3.to_int()
+        let w4 = n4.to_int()
+        let w5 = n5.to_int()
+        let w6 = n6.to_int()
+        let w7 = n7.to_int()
+        i0 = (n0 >> 32).to_int() +
+          lgb_gt(ranks.unsafe_get(w0 >> 16), w0 & 0xFFFF)
+        i1 = (n1 >> 32).to_int() +
+          lgb_gt(ranks.unsafe_get(w1 >> 16), w1 & 0xFFFF)
+        i2 = (n2 >> 32).to_int() +
+          lgb_gt(ranks.unsafe_get(w2 >> 16), w2 & 0xFFFF)
+        i3 = (n3 >> 32).to_int() +
+          lgb_gt(ranks.unsafe_get(w3 >> 16), w3 & 0xFFFF)
+        i4 = (n4 >> 32).to_int() +
+          lgb_gt(ranks.unsafe_get(w4 >> 16), w4 & 0xFFFF)
+        i5 = (n5 >> 32).to_int() +
+          lgb_gt(ranks.unsafe_get(w5 >> 16), w5 & 0xFFFF)
+        i6 = (n6 >> 32).to_int() +
+          lgb_gt(ranks.unsafe_get(w6 >> 16), w6 & 0xFFFF)
+        i7 = (n7 >> 32).to_int() +
+          lgb_gt(ranks.unsafe_get(w7 >> 16), w7 & 0xFFFF)
+      }
+      let g = (t + 0) % groups
+      margin[g] = margin[g] + lv.unsafe_get(i0)
+      let g = (t + 1) % groups
+      margin[g] = margin[g] + lv.unsafe_get(i1)
+      let g = (t + 2) % groups
+      margin[g] = margin[g] + lv.unsafe_get(i2)
+      let g = (t + 3) % groups
+      margin[g] = margin[g] + lv.unsafe_get(i3)
+      let g = (t + 4) % groups
+      margin[g] = margin[g] + lv.unsafe_get(i4)
+      let g = (t + 5) % groups
+      margin[g] = margin[g] + lv.unsafe_get(i5)
+      let g = (t + 6) % groups
+      margin[g] = margin[g] + lv.unsafe_get(i6)
+      let g = (t + 7) % groups
+      margin[g] = margin[g] + lv.unsafe_get(i7)
+      t += 8
+    }
+  }
   while t + 4 <= trees {
     let mut i0 = self.roots.unsafe_get(t)
     let mut i1 = self.roots.unsafe_get(t + 1)
@@ -528,19 +722,40 @@ fn LgbFast::single_ranks(
         d = dj
       }
     }
-    for _ in 0..<d {
-      let k0 = rank.unsafe_get(i0)
-      let k1 = rank.unsafe_get(i1)
-      let k2 = rank.unsafe_get(i2)
-      let k3 = rank.unsafe_get(i3)
-      i0 = left.unsafe_get(i0) +
-        lgb_gt(ranks.unsafe_get(slot.unsafe_get(i0)), k0)
-      i1 = left.unsafe_get(i1) +
-        lgb_gt(ranks.unsafe_get(slot.unsafe_get(i1)), k1)
-      i2 = left.unsafe_get(i2) +
-        lgb_gt(ranks.unsafe_get(slot.unsafe_get(i2)), k2)
-      i3 = left.unsafe_get(i3) +
-        lgb_gt(ranks.unsafe_get(slot.unsafe_get(i3)), k3)
+    if LGB_PACKED {
+      for _ in 0..<d {
+        let n0 = node.unsafe_get(i0)
+        let n1 = node.unsafe_get(i1)
+        let n2 = node.unsafe_get(i2)
+        let n3 = node.unsafe_get(i3)
+        let w0 = n0.to_int()
+        let w1 = n1.to_int()
+        let w2 = n2.to_int()
+        let w3 = n3.to_int()
+        i0 = (n0 >> 32).to_int() +
+          lgb_gt(ranks.unsafe_get(w0 >> 16), w0 & 0xFFFF)
+        i1 = (n1 >> 32).to_int() +
+          lgb_gt(ranks.unsafe_get(w1 >> 16), w1 & 0xFFFF)
+        i2 = (n2 >> 32).to_int() +
+          lgb_gt(ranks.unsafe_get(w2 >> 16), w2 & 0xFFFF)
+        i3 = (n3 >> 32).to_int() +
+          lgb_gt(ranks.unsafe_get(w3 >> 16), w3 & 0xFFFF)
+      }
+    } else {
+      for _ in 0..<d {
+        let k0 = rank.unsafe_get(i0)
+        let k1 = rank.unsafe_get(i1)
+        let k2 = rank.unsafe_get(i2)
+        let k3 = rank.unsafe_get(i3)
+        i0 = left.unsafe_get(i0) +
+          lgb_gt(ranks.unsafe_get(slot.unsafe_get(i0)), k0)
+        i1 = left.unsafe_get(i1) +
+          lgb_gt(ranks.unsafe_get(slot.unsafe_get(i1)), k1)
+        i2 = left.unsafe_get(i2) +
+          lgb_gt(ranks.unsafe_get(slot.unsafe_get(i2)), k2)
+        i3 = left.unsafe_get(i3) +
+          lgb_gt(ranks.unsafe_get(slot.unsafe_get(i3)), k3)
+      }
     }
     let g = t % groups
     margin[g] = margin[g] + lv.unsafe_get(i0)
@@ -825,6 +1040,38 @@ fn LgbFast::float_slots(
   let w = self.width()
   let sf = self.slot_feature
   let sv = self.slot_variant
+  let mut fits = (start + n) * cols <= data.length()
+  for i in 0..<w {
+    if sf[i] >= cols {
+      fits = false
+    }
+  }
+  if fits {
+    // Every slot reads a column: select the NaN and near-zero readings
+    // from per-slot tables instead of branching on the variant.
+    let nan = 0x7FF8000000000000UL.reinterpret_as_double()
+    let nanv = FixedArray::makei(w, i => {
+      Float::from_double(lgb_slot_value(sv[i], nan))
+    })
+    let zerov = FixedArray::makei(w, i => {
+      Float::from_double(lgb_slot_value(sv[i], 0.0))
+    })
+    let zf = Float::from_double(lgb_zero)
+    let inf = Float::reinterpret_from_int(0x7F800000)
+    let fmax = Float::reinterpret_from_int(0x7F7FFFFF)
+    for r in 0..<n {
+      let base = (start + r) * cols
+      let o = r * w
+      for i in 0..<w {
+        let x = data.unsafe_get(base + sf.unsafe_get(i))
+        let y = if x == inf { fmax } else { x }
+        let y = if x.abs() <= zf { zerov.unsafe_get(i) } else { y }
+        let y = if x != x { nanv.unsafe_get(i) } else { y }
+        out.unsafe_set(o + i, y)
+      }
+    }
+    return
+  }
   for r in 0..<n {
     let base = (start + r) * cols
     let o = r * w

@@ -135,6 +135,39 @@ All 30,000 predictions are bit-for-bit identical to XGBoost's. Reproduce with
 `python3 bench/gen_models.py`, then `moonboost bench`, `node
 bench/node_bench.mjs`, and `bench/xgb_capi_bench.c` (build line at its top).
 
+### Against onnxruntime-web
+
+The usual way to run an XGBoost model in a browser is to convert it to ONNX
+(`onnxmltools`) and load it with onnxruntime-web. `bench/web_bench.mjs`
+compares that with moonboost's JS build in Node 22, same machine, same
+10,000 rows, one thread each (`ort.env.wasm.numThreads = 1`, WebAssembly
+backend), each engine in a fresh process. Means of two runs:
+
+| Model | | moonboost (JS) | onnxruntime-web 1.31.1 (wasm) |
+|---|---|---|---|
+| 100 trees, depth 4 | cold start | 52 ms | 312 ms |
+| | batch, µs/row | 0.92 | 3.4 |
+| | one row per call, µs | 3.6 | 39 |
+| | probabilities equal to XGBoost's | 10,000 / 10,000 | 5,776 / 10,000 |
+| 500 trees, depth 8 | cold start | 272 ms | 573 ms |
+| | batch, µs/row | 5.8 | 28.6 |
+| | one row per call, µs | 12.6 | 117 |
+| | probabilities equal to XGBoost's | 10,000 / 10,000 | 5,037 / 10,000 |
+| 1000 trees, depth 10 | cold start | 431 ms | 1,191 ms |
+| | batch, µs/row | 15.3 | 65.2 |
+| | one row per call, µs | 62 | 276 |
+| | probabilities equal to XGBoost's | 10,000 / 10,000 | 5,053 / 10,000 |
+
+Cold start is import, model load and the first prediction. Where
+onnxruntime-web differs from XGBoost, it is by at most 1.2e-7, which is
+enough to reorder near-ties in a ranking. One-row-per-call times move by up
+to about 40% between runs on this VM; the other columns by a few percent. What ships to the
+browser: moonboost is one 160 KB module (50.6 KB gzipped); onnxruntime-web's
+WebAssembly build is `ort.wasm.min.mjs` (54 KB) plus
+`ort-wasm-simd-threaded.mjs` (25 KB) plus a 14.8 MB `.wasm` file (3.8 MB
+gzipped). Model files are smaller in ONNX (97 KB against 223 KB of JSON for
+the small model).
+
 How the batch path works (`lockstep.mbt`):
 
 - **Ranks instead of floats.** The distinct split thresholds of each feature

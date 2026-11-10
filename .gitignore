@@ -5,3 +5,5 @@ target
 .mooncakes/
 .moonagent/
 bench/data/
+bench/node_modules
+bench/package-lock.json

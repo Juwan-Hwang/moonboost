@@ -28,7 +28,8 @@ trust because it is tested against XGBoost itself.
 | Leaf indices (`pred_leaf`) | done |
 | Batch prediction from CSV | done |
 | CLI | done |
-| `dart`, `gblinear` boosters | planned |
+| `dart` (tree weights) and `gblinear` boosters | done |
+| Multiclass models with one base score per class (XGBoost 3.x) | done |
 | LightGBM text models | planned |
 | Verified tree-walking kernel (`moon prove`) | done |
 | Blocked batch prediction | done |
@@ -48,8 +49,11 @@ checks that:
   may differ between libm implementations).
 
 Covered today: regression, binary classification with 10% missing values,
-multiclass `softprob` and `softmax`, Poisson regression, and a model with two
-categorical features. CI regenerates the fixtures from the pinned XGBoost
+multiclass `softprob` and `softmax` (including unbalanced classes, where
+XGBoost 3.x keeps one base score per class), Poisson, Gamma and Tweedie
+regression, `binary:logitraw`, a model with two categorical features, DART
+models (in the 3.x layout and the older `dart` booster layout), and
+`gblinear` regression, logistic and multiclass models. CI regenerates the fixtures from the pinned XGBoost
 release and fails if anything drifts.
 
 On the three benchmark models below, all 30,000 final predictions match
@@ -58,6 +62,13 @@ XGBoost exactly on both the native and the JS build.
 The trick is to do what XGBoost does: keep every value in 32-bit floats,
 compare `x < threshold` in float32, start from the objective's base margin,
 and accumulate trees in order.
+
+DART and `gblinear` add a product (`leaf * weight`, `x * w`) to a running
+sum. XGBoost's x86-64 build rounds the product first, and so does
+moonboost on every backend; the reference fixtures come from x86-64. Builds
+of XGBoost for aarch64 fuse that multiply-add into one instruction, so for
+these two boosters an aarch64 XGBoost can differ from x86-64 XGBoost (and
+from moonboost) in the last bit.
 
 ## Verified kernel
 

@@ -37,7 +37,11 @@ fn load_model(path : String) -> @moonboost.Model raise {
 fn info(path : String) -> Unit raise {
   let m = load_model(path)
   println("objective:   \{m.objective.name()}")
-  println("trees:       \{m.num_trees()}")
+  if m.linear.length() > 0 {
+    println("booster:     gblinear")
+  } else {
+    println("trees:       \{m.num_trees()}")
+  }
   println("outputs:     \{m.num_group}")
   println("features:    \{m.num_feature}")
   let nodes = m.trees.fold(init=0, (acc, t) => acc + t.num_nodes())

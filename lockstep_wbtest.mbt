@@ -1,7 +1,7 @@
 ///|
 /// Margin through the verified kernel, ignoring the lockstep engine.
 fn kernel_margin(m : Model, row : ArrayView[Float]) -> Array[Float] {
-  let out = Array::make(m.num_group, m.base_margin)
+  let out = m.base_margin.copy()
   let keys = m.compiled.keys(row)
   for t in 0..<m.tree_group.length() {
     let g = m.tree_group[t]

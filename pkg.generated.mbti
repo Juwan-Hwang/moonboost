@@ -38,13 +38,15 @@ pub struct Model {
   tree_group : Array[Int32]
   num_group : Int32
   num_feature : Int32
-  base_margin : Float
+  base_margin : Array[Float]
+  linear : Array[Float]
   objective : Objective
   feature_names : Array[String]
   // private fields
 }
 pub fn Model::from_xgboost_json(StringView) -> Self raise ModelError
-pub fn Model::new(trees~ : Array[Tree], tree_group~ : Array[Int32], num_group~ : Int32, num_feature~ : Int32, base_score~ : Float, objective~ : Objective, feature_names? : Array[String]) -> Self raise ModelError
+pub fn Model::linear(weights~ : Array[Float], num_group~ : Int32, num_feature~ : Int32, base_score~ : Float, objective~ : Objective, feature_names? : Array[String]) -> Self raise ModelError
+pub fn Model::new(trees~ : Array[Tree], tree_group~ : Array[Int32], num_group~ : Int32, num_feature~ : Int32, base_score~ : Float, objective~ : Objective, feature_names? : Array[String], base_scores? : Array[Float]) -> Self raise ModelError
 pub fn Model::num_trees(Self) -> Int32
 pub fn Model::output_width(Self) -> Int32
 pub fn Model::predict(Self, ArrayView[Float]) -> Array[Float]

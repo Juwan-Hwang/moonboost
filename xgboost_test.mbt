@@ -91,10 +91,10 @@ test "xgboost poisson regression" {
 }
 
 ///|
-test "rejects non-gbtree boosters" {
+test "rejects unknown boosters" {
   let json =
     #|{"learner":{"learner_model_param":{"base_score":"[5E-1]","num_class":"0","num_feature":"1","num_target":"1"},
-    #|"objective":{"name":"reg:squarederror"},"gradient_booster":{"name":"gblinear","model":{}}}}
+    #|"objective":{"name":"reg:squarederror"},"gradient_booster":{"name":"gbforest","model":{}}}}
   let r = Ok(@moonboost.Model::from_xgboost_json(json)) catch { e => Err(e) }
   inspect(r is Err(Unsupported(_)), content="true")
 }
@@ -117,4 +117,39 @@ test "xgboost tweedie regression" {
 ///|
 test "xgboost binary logitraw" {
   check(fixture_binary_logitraw)
+}
+
+///|
+test "xgboost multiclass with one base score per class" {
+  check(fixture_multi_base_vector)
+}
+
+///|
+test "xgboost dart binary classification" {
+  check(fixture_dart_binary)
+}
+
+///|
+test "xgboost dart multiclass" {
+  check(fixture_dart_multi)
+}
+
+///|
+test "xgboost dart in the pre-3.0 layout" {
+  check(fixture_dart_legacy_layout)
+}
+
+///|
+test "xgboost gblinear regression" {
+  check(fixture_gblinear_regression)
+}
+
+///|
+test "xgboost gblinear logistic" {
+  check(fixture_gblinear_logistic)
+}
+
+///|
+test "xgboost gblinear multiclass" {
+  check(fixture_gblinear_multi)
 }

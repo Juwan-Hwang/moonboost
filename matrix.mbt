@@ -130,8 +130,18 @@ pub fn Model::predict_batch(self : Model, m : DenseMatrix) -> Array[Float] {
   }
   for start = 0; start < m.rows; start = start + block {
     let n = if m.rows - start < block { m.rows - start } else { block }
-    margin.fill(self.base_margin)
-    if self.fast is Some(fast) && fast.walks_values() && groups == 1 {
+    for r in 0..<n {
+      for g in 0..<groups {
+        margin[r * groups + g] = self.base_margin[g]
+      }
+    }
+    if self.linear.length() != 0 {
+      for r in 0..<n {
+        for g in 0..<groups {
+          margin[r * groups + g] = self.linear_margin(m.row(start + r), g)
+        }
+      }
+    } else if self.fast is Some(fast) && fast.walks_values() && groups == 1 {
       if fast.vheap.length() > 0 {
         fast.predict_vheap(m.data, m.cols, start, n, ranks, vals, margin)
       } else {

@@ -8,21 +8,24 @@ fn param_int(obj : Src, key : String) -> Int32 raise ModelError {
 }
 
 ///|
-/// `base_score` is `"0.5"` in older models and `"[5E-1]"` (a vector) in 3.x.
-fn parse_base_score(s : String) -> Float raise ModelError {
-  let body = s.trim(chars="[] ")
-  let first = match body.to_owned().split_once(",") {
-    Some((a, _)) => a
-    None => body
+/// `base_score` is `"0.5"` in older models and a vector such as `"[5E-1]"`
+/// in 3.x, where multiclass models keep one entry per class.
+fn parse_base_score(s : String) -> Array[Float] raise ModelError {
+  let out = []
+  for part in s.trim(chars="[] ").split(",") {
+    let d = @string.parse_double(part.trim(chars=" ")) catch {
+      _ => raise InvalidModel("bad base_score: \{s}")
+    }
+    out.push(Float::from_double(d))
   }
-  let d = @string.parse_double(first) catch {
-    _ => raise InvalidModel("bad base_score: \{s}")
-  }
-  Float::from_double(d)
+  out
 }
 
 ///|
-fn parse_tree(t : Src) -> Tree raise ModelError {
+/// Parse one tree. `weight` scales its leaves (DART's tree weights): XGBoost
+/// adds `leaf * weight` rounded to float32, so the scaled leaf is exactly the
+/// term it adds.
+fn parse_tree(t : Src, weight : Float) -> Tree raise ModelError {
   let left = t.field("left_children").ints("left_children")
   let split_type = t.field("split_type").ints("split_type")
   let categories : Array[Array[Int32]?] = Array::make(left.length(), None)
@@ -48,11 +51,25 @@ fn parse_tree(t : Src) -> Tree raise ModelError {
       }
     }
   }
+  let value = t.field("split_conditions").floats("split_conditions")
+  if value.length() != left.length() {
+    raise InvalidModel("tree arrays have inconsistent lengths")
+  }
   Tree::new(
     left~,
     right=t.field("right_children").ints("right_children"),
     feature=t.field("split_indices").ints("split_indices"),
-    value=t.field("split_conditions").floats("split_conditions"),
+    value=if weight == 1.0 {
+      value
+    } else {
+      Array::makei(value.length(), i => {
+        if left[i] == -1 {
+          value[i] * weight
+        } else {
+          value[i]
+        }
+      })
+    },
     default_left=t.field("default_left").ints("default_left").map(x => x != 0),
     categories~,
   )
@@ -61,9 +78,10 @@ fn parse_tree(t : Src) -> Tree raise ModelError {
 ///|
 /// Load a model saved by XGBoost's `Booster.save_model("model.json")`.
 ///
-/// Supports the `gbtree` booster with numerical and categorical splits.
-/// Categorical features are passed as their integer codes. Raises
-/// `Unsupported` for `gblinear` and `dart`.
+/// Supports the `gbtree` booster with numerical and categorical splits, DART
+/// models (tree weights, in both the 3.x layout and the older `dart` booster
+/// object) and the `gblinear` booster. Categorical features are passed as
+/// their integer codes.
 pub fn Model::from_xgboost_json(text : StringView) -> Model raise ModelError {
   let root = Src::parse(text)
   let learner = root.field("learner")
@@ -77,14 +95,9 @@ pub fn Model::from_xgboost_json(text : StringView) -> Model raise ModelError {
     learner.field("objective").field("name").string("objective.name"),
     num_class~,
   )
+  let num_group = if num_class > 1 { num_class } else { 1 }
   let gb = learner.field("gradient_booster")
   let booster = gb.field("name").string("gradient_booster.name")
-  if booster != "gbtree" {
-    raise Unsupported("booster \{booster}")
-  }
-  let model = gb.field("model")
-  let trees = model.field("trees").items("trees").map(parse_tree)
-  let tree_group = model.field("tree_info").ints("tree_info")
   // optional; anything but an array of strings is ignored as before
   let names = if learner.has("feature_names") {
     learner.field("feature_names").items("feature_names") catch {
@@ -94,13 +107,58 @@ pub fn Model::from_xgboost_json(text : StringView) -> Model raise ModelError {
     []
   }
   let feature_names = names.map(v => v.string("feature_names"))
+  if booster == "gblinear" {
+    return Model::linear(
+      weights=gb.field("model").field("weights").floats("weights"),
+      num_group~,
+      num_feature~,
+      base_score=base_score[0],
+      objective~,
+      feature_names~,
+    )
+  }
+  // DART: 3.x saves a `gbtree` whose model carries `weight_drop`; older
+  // releases save a `dart` booster wrapping the gbtree, weights beside it.
+  let (model, weights) = match booster {
+    "gbtree" => {
+      let model = gb.field("model")
+      let w = if model.has("weight_drop") {
+        model.field("weight_drop").floats("weight_drop")
+      } else {
+        []
+      }
+      (model, w)
+    }
+    "dart" =>
+      (
+        gb.field("gbtree").field("model"),
+        gb.field("weight_drop").floats("weight_drop"),
+      )
+    _ => raise Unsupported("booster \{booster}")
+  }
+  let items = model.field("trees").items("trees")
+  if weights.length() > items.length() {
+    raise InvalidModel(
+      "\{weights.length()} tree weights for \{items.length()} trees",
+    )
+  }
+  let trees = items.mapi((i, t) => {
+    parse_tree(t, if i < weights.length() { weights[i] } else { 1.0 })
+  })
+  let tree_group = model.field("tree_info").ints("tree_info")
+  if base_score.length() != 1 && base_score.length() != num_group {
+    raise InvalidModel(
+      "\{base_score.length()} base scores for \{num_group} groups",
+    )
+  }
   Model::new(
     trees~,
     tree_group~,
-    num_group=if num_class > 1 { num_class } else { 1 },
+    num_group~,
     num_feature~,
-    base_score~,
+    base_score=base_score[0],
     objective~,
     feature_names~,
+    base_scores=if base_score.length() == num_group { base_score } else { [] },
   )
 }

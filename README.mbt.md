@@ -10,6 +10,11 @@ predictions **bit for bit**, from one codebase that runs
 on the `native`, `wasm`, `wasm-gc` and `js` backends. No Python, no C++
 runtime, no ONNX conversion step.
 
+**[Try it in your browser](https://juwan-hwang.github.io/moonboost/)**: a
+200-tree XGBoost model scoring California housing blocks in the page, a
+bit-for-bit check against XGBoost on 2,000 rows, and a race against
+onnxruntime-web on the same model (source in `docs/`).
+
 ## Why
 
 Most GBDT models are trained in Python but need to run somewhere else: a
@@ -35,6 +40,7 @@ trust because it is tested against XGBoost itself.
 | Verified tree-walking kernel (`moon prove`) | done |
 | Blocked batch prediction | done |
 | ES module for browsers and Node (`web/`) | done |
+| Browser demo (`docs/`, GitHub Pages) | done |
 | XGBoost UBJSON models | planned |
 | Training | planned |
 
@@ -162,7 +168,8 @@ Cold start is import, model load and the first prediction. Where
 onnxruntime-web differs from XGBoost, it is by at most 1.2e-7, which is
 enough to reorder near-ties in a ranking. One-row-per-call times move by up
 to about 40% between runs on this VM; the other columns by a few percent. What ships to the
-browser: moonboost is one 160 KB module (50.6 KB gzipped); onnxruntime-web's
+browser: moonboost is one 181 KB module (56 KB gzipped, LightGBM support
+included); onnxruntime-web's
 WebAssembly build is `ort.wasm.min.mjs` (54 KB) plus
 `ort-wasm-simd-threaded.mjs` (25 KB) plus a 14.8 MB `.wasm` file (3.8 MB
 gzipped). Model files are smaller in ONNX (97 KB against 223 KB of JSON for
@@ -220,7 +227,7 @@ How the batch path works (`lockstep.mbt`):
 
 Leaves are still added in tree order in float32, which is what keeps the
 results identical. Models with categorical splits use the verified kernel.
-The JS bundle minified with esbuild is 160 KB, 50.6 KB gzipped, with no other runtime.
+The JS bundle minified with esbuild is 181 KB, 56 KB gzipped, with no other runtime.
 
 ## Usage
 
@@ -318,6 +325,7 @@ content.
 moon test --target all        # unit + differential tests
 python3 tools/gen_fixtures.py && moon fmt       # regenerate XGBoost fixtures
 python3 tools/gen_lgb_fixtures.py && moon fmt   # regenerate LightGBM fixtures
+python3 tools/gen_demo.py && sh tools/build_demo.sh   # rebuild the browser demo
 ```
 
 ## License and attribution

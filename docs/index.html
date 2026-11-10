@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>moonboost: XGBoost in your browser, bit for bit</title>
+<style>
+  :root { --ink:#1d2330; --mute:#5b6476; --line:#e3e6ec; --accent:#2f5bea; --ok:#16794a; --bad:#b4372f; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink); background:#f7f8fa; }
+  main { max-width: 920px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 20px; margin: 0 0 10px; }
+  p.lead { color: var(--mute); margin: 0 0 24px; max-width: 70ch; }
+  section { background:#fff; border:1px solid var(--line); border-radius:12px; padding:22px; margin:18px 0; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 10px 28px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  label { display:block; font-size:14px; color:var(--mute); }
+  .row { display:flex; align-items:center; gap:10px; }
+  .row input[type=range] { flex:1; accent-color: var(--accent); }
+  .val { width: 64px; text-align:right; font-variant-numeric: tabular-nums; font-size:14px; }
+  .miss { font-size:12px; color:var(--mute); white-space:nowrap; }
+  .out { margin-top: 18px; padding: 16px; border-radius: 10px; background:#eef2ff; display:flex; flex-wrap:wrap; gap: 6px 24px; align-items: baseline; }
+  .big { font-size: 34px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .small { font-size: 13px; color: var(--mute); }
+  button { font: inherit; padding: 9px 16px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color:#fff; cursor:pointer; }
+  button:disabled { opacity: .55; cursor: default; }
+  table { border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 15px; }
+  th, td { text-align:left; padding: 8px 10px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  th { color: var(--mute); font-weight: 600; font-size: 13px; }
+  .ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; }
+  code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; background:#f1f3f7; padding: 1px 5px; border-radius: 4px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>XGBoost in your browser, bit for bit</h1>
+  <p class="lead">
+    A 200-tree XGBoost model trained on the California housing data, running in this tab
+    through <a href="https://github.com/Juwan-Hwang/moonboost">moonboost</a>, a gradient
+    boosting predictor written in MoonBit and compiled to JavaScript. Nothing is sent to a
+    server. The predictor is <span id="libsize">a single small module</span>.
+  </p>
+
+  <section>
+    <h2>Estimate a block's median house value</h2>
+    <div class="grid" id="inputs"></div>
+    <div class="out">
+      <span class="big" id="price">…</span>
+      <span class="small" id="timing"></span>
+    </div>
+    <p class="small">Tick "missing" to leave a feature out: the model then follows the default
+      branch XGBoost learned for missing values, exactly as XGBoost would.</p>
+  </section>
+
+  <section>
+    <h2>Same answers as XGBoost</h2>
+    <p class="small">2,000 held-out blocks, scored by XGBoost 3.4.1 in Python and stored as raw
+      float32 bits, scored again here.</p>
+    <div id="check">Checking…</div>
+  </section>
+
+  <section>
+    <h2>Race it against onnxruntime-web</h2>
+    <p class="small">Loads onnxruntime-web from a CDN with the same model converted to ONNX, and
+      times both engines on the 2,000 blocks in this browser (one thread each).</p>
+    <button id="race">Run the comparison</button>
+    <div id="raceout"></div>
+  </section>
+
+  <p class="small">Source, tests and benchmarks: <a href="https://github.com/Juwan-Hwang/moonboost">github.com/Juwan-Hwang/moonboost</a>.
+    Model and data are built by <code>tools/gen_demo.py</code>.</p>
+</main>
+
+<script type="module">
+import * as mb from "./moonboost.min.js";
+
+const fmt = (v) => "$" + Math.round(v * 100000).toLocaleString("en-US");
+const [modelText, data, lib] = await Promise.all([
+  fetch("model.json").then((r) => r.text()),
+  fetch("rows.json").then((r) => r.json()),
+  fetch("moonboost.min.js").then((r) => r.blob()),
+]);
+document.getElementById("libsize").textContent =
+  `one ${Math.round(lib.size / 1024)} KB module with no other runtime`;
+
+let t = performance.now();
+const model = mb.load_model(modelText);
+if (model === undefined) throw new Error(mb.last_error());
+const loadMs = performance.now() - t;
+
+// --- interactive estimate ---------------------------------------------------
+const names = data.features;
+const labels = {
+  MedInc: "Median income (×$10k)", HouseAge: "Median house age (years)",
+  AveRooms: "Rooms per household", AveBedrms: "Bedrooms per household",
+  Population: "Block population", AveOccup: "People per household",
+  Latitude: "Latitude", Longitude: "Longitude",
+};
+const box = document.getElementById("inputs");
+const ctl = names.map((n, i) => {
+  const lo = data.lo[i], hi = data.hi[i];
+  const step = (hi - lo) / 200;
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `<label>${labels[n] ?? n}</label>
+    <div class="row"><input type="range" min="${lo}" max="${hi}" step="${step}" value="${data.medians[i]}">
+    <span class="val"></span><label class="miss"><input type="checkbox"> missing</label></div>`;
+  box.appendChild(wrap);
+  const range = wrap.querySelector("input[type=range]");
+  const miss = wrap.querySelector("input[type=checkbox]");
+  const val = wrap.querySelector(".val");
+  return { range, miss, val };
+});
+function update() {
+  const row = ctl.map((c) => {
+    c.val.textContent = c.miss.checked ? "—" : (+c.range.value).toFixed(2);
+    c.range.disabled = c.miss.checked;
+    return c.miss.checked ? NaN : +c.range.value;
+  });
+  const t0 = performance.now();
+  const p = mb.predict(model, row)[0];
+  const us = (performance.now() - t0) * 1000;
+  document.getElementById("price").textContent = fmt(p);
+  document.getElementById("timing").textContent =
+    `predicted in ${us < 1000 ? us.toFixed(0) + " µs" : (us / 1000).toFixed(1) + " ms"} · model loaded in ${loadMs.toFixed(0)} ms`;
+}
+for (const c of ctl) { c.range.oninput = update; c.miss.onchange = update; }
+update();
+
+// --- bit-for-bit check ------------------------------------------------------
+const cols = names.length;
+const x = new Float32Array(data.x);
+const n = x.length / cols;
+const expected = new Float32Array(new Uint32Array(data.expected_bits).buffer);
+const ours = mb.predict_batch(model, x, cols);
+let same = 0;
+for (let i = 0; i < n; i++) if (Object.is(ours[i], expected[i])) same++;
+document.getElementById("check").innerHTML =
+  `<span class="${same === n ? "ok" : "bad"}">${same.toLocaleString()} of ${n.toLocaleString()}</span>
+   predictions are identical to XGBoost's, bit for bit.`;
+
+// --- race against onnxruntime-web -------------------------------------------
+document.getElementById("race").onclick = async (ev) => {
+  const btn = ev.target;
+  btn.disabled = true;
+  const out = document.getElementById("raceout");
+  out.textContent = "Loading onnxruntime-web…";
+  const bestOf = async (f, k = 5) => { let b = Infinity; for (let i = 0; i < k; i++) { const s = performance.now(); await f(); b = Math.min(b, performance.now() - s); } return b; };
+  const rowsArr = Array.from({ length: n }, (_, i) => Array.from(x.subarray(i * cols, (i + 1) * cols)));
+
+  let t0 = performance.now();
+  const ort = await import("https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.wasm.min.mjs");
+  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
+  const onnxBytes = new Uint8Array(await (await fetch("model.onnx")).arrayBuffer());
+  const sess = await ort.InferenceSession.create(onnxBytes, { executionProviders: ["wasm"] });
+  const ortRun = async (arr, m) => (await sess.run({ input: new ort.Tensor("float32", arr, [m, cols]) })).variable.data;
+  await ortRun(x.subarray(0, cols), 1);
+  const ortCold = performance.now() - t0;
+  out.textContent = "Timing…";
+
+  const ortOut = await ortRun(x, n);
+  let ortSame = 0;
+  for (let i = 0; i < n; i++) if (Object.is(ortOut[i], expected[i])) ortSame++;
+  const mbBatch = await bestOf(() => mb.predict_batch(model, x, cols));
+  const ortBatch = await bestOf(() => ortRun(x, n));
+  const k = 500;
+  const mbOne = await bestOf(() => { for (let i = 0; i < k; i++) mb.predict(model, rowsArr[i]); }, 3);
+  const ortOne = await bestOf(async () => { for (let i = 0; i < k; i++) await ortRun(x.subarray(i * cols, (i + 1) * cols), 1); }, 3);
+  const us = (ms, m) => (ms * 1000 / m).toFixed(2) + " µs";
+  out.innerHTML = `<table>
+    <tr><th></th><th>moonboost</th><th>onnxruntime-web 1.31.1</th></tr>
+    <tr><td>Load (model; ORT also fetches its runtime)</td><td>${loadMs.toFixed(0)} ms</td><td>${ortCold.toFixed(0)} ms</td></tr>
+    <tr><td>Batch of ${n.toLocaleString()}, per row</td><td>${us(mbBatch, n)}</td><td>${us(ortBatch, n)}</td></tr>
+    <tr><td>One row per call</td><td>${us(mbOne, k)}</td><td>${us(ortOne, k)}</td></tr>
+    <tr><td>Identical to XGBoost</td><td class="${same === n ? "ok" : "bad"}">${same} / ${n}</td><td class="${ortSame === n ? "ok" : "bad"}">${ortSame} / ${n}</td></tr>
+  </table>`;
+  btn.disabled = false;
+};
+</script>
+</body>
+</html>

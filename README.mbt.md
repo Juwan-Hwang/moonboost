@@ -5,7 +5,8 @@
 Gradient boosted decision trees (GBDT) in pure MoonBit.
 
 moonboost loads models trained by [XGBoost](https://github.com/dmlc/xgboost)
-and reproduces their predictions **bit for bit**, from one codebase that runs
+or [LightGBM](https://github.com/microsoft/LightGBM) and reproduces their
+predictions **bit for bit**, from one codebase that runs
 on the `native`, `wasm`, `wasm-gc` and `js` backends. No Python, no C++
 runtime, no ONNX conversion step.
 
@@ -30,7 +31,7 @@ trust because it is tested against XGBoost itself.
 | CLI | done |
 | `dart` (tree weights) and `gblinear` boosters | done |
 | Multiclass models with one base score per class (XGBoost 3.x) | done |
-| LightGBM text models | planned |
+| LightGBM text models (numerical and categorical splits, all missing-value modes, every built-in objective) | done |
 | Verified tree-walking kernel (`moon prove`) | done |
 | Blocked batch prediction | done |
 | ES module for browsers and Node (`web/`) | done |
@@ -39,8 +40,9 @@ trust because it is tested against XGBoost itself.
 
 ## Correctness
 
-Every test model is trained by XGBoost 3.4.1 (`tools/gen_fixtures.py`), and
-the expected outputs are stored as raw float32 bit patterns. `moon test`
+Every XGBoost test model is trained by XGBoost 3.4.1
+(`tools/gen_fixtures.py`), and the expected outputs are stored as raw float32
+bit patterns. `moon test`
 checks that:
 
 - raw margins are **identical bit for bit** to XGBoost's
@@ -69,6 +71,17 @@ moonboost on every backend; the reference fixtures come from x86-64. Builds
 of XGBoost for aarch64 fuse that multiply-add into one instruction, so for
 these two boosters an aarch64 XGBoost can differ from x86-64 XGBoost (and
 from moonboost) in the last bit.
+
+LightGBM models are checked the same way against LightGBM 4.7.0
+(`tools/gen_lgb_fixtures.py`, float64 bit patterns): raw scores and leaf
+indices bit for bit, final predictions within 2 ulp. The cases cover
+regression (also with `reg_sqrt`), binary (also with a `sigmoid` parameter),
+`multiclass`, `multiclassova`, Poisson, Gamma, Tweedie, both cross-entropy
+objectives, zeros as missing values, `use_missing=false`, categorical
+features with missing and negative codes, and random forest mode. LightGBM
+compares doubles (`x <= threshold`), turns NaN into 0 unless the split
+handles NaN, reads values within 1e-35 of zero as zero, and adds trees in
+double; moonboost does the same.
 
 ## Verified kernel
 
@@ -214,6 +227,22 @@ fn predict_csv(
 }
 ```
 
+LightGBM text models (`booster.save_model("model.txt")`) load into a
+`LightGBMModel`. LightGBM works in doubles throughout, so rows are
+`Double`s and so are the results:
+
+```moonbit nocheck
+///|
+fn predict_lightgbm(text : String) -> Unit raise {
+  let model = @moonboost.LightGBMModel::from_text(text)
+  let row : Array[Double] = [5.1, 3.5, 1.4, 0.2]
+  let probs = model.predict(row) // what LightGBM's predict() returns
+  let raw = model.predict_raw(row) // predict(raw_score=True)
+  let leaves = model.predict_leaf(row) // predict(pred_leaf=True)
+  println("\{probs} \{raw} \{leaves}")
+}
+```
+
 ## JavaScript
 
 ```
@@ -227,6 +256,9 @@ predict(model, [5.1, 3.5, 1.4, 0.2]);
 // rows may be a Float32Array (used as is) or any array of numbers
 predict_batch(model, new Float32Array(rowMajorValues), 4); // 4 columns
 ```
+
+LightGBM models use `load_lightgbm(text)`, `predict_lightgbm(model, row)`
+and `predict_lightgbm_raw(model, row)`.
 
 See `examples/node/iris.mjs`.
 
@@ -244,16 +276,20 @@ moon run cmd/main --target js -- predict examples/iris/model.json examples/iris/
 ```
 
 `--margin` prints raw scores and `--leaf` prints the leaf reached in each tree.
+LightGBM text models work the same way; the CLI tells the formats apart by
+content.
 
 ## Development
 
 ```
 moon test --target all        # unit + differential tests
-python3 tools/gen_fixtures.py && moon fmt   # regenerate fixtures
+python3 tools/gen_fixtures.py && moon fmt       # regenerate XGBoost fixtures
+python3 tools/gen_lgb_fixtures.py && moon fmt   # regenerate LightGBM fixtures
 ```
 
 ## License and attribution
 
-Apache-2.0. moonboost reads the XGBoost JSON model format and follows
-XGBoost's prediction semantics; no XGBoost source code is included. XGBoost is
-Apache-2.0, © the XGBoost contributors.
+Apache-2.0. moonboost reads the XGBoost JSON and LightGBM text model formats
+and follows their prediction semantics; no XGBoost or LightGBM source code is
+included. XGBoost is Apache-2.0, © the XGBoost contributors. LightGBM is MIT,
+© Microsoft Corporation and the LightGBM developers.

@@ -8,6 +8,8 @@ import {
 // Values
 pub fn last_error() -> String
 
+pub fn load_lightgbm(String) -> @moonboost.LightGBMModel?
+
 pub fn load_model(String) -> @moonboost.Model?
 
 pub fn num_features(@moonboost.Model) -> Int32
@@ -17,6 +19,10 @@ pub fn output_width(@moonboost.Model) -> Int32
 pub fn predict(@moonboost.Model, FixedArray[Double]) -> FixedArray[Double]
 
 pub fn predict_batch(@moonboost.Model, FixedArray[Double], Int32) -> FixedArray[Double]
+
+pub fn predict_lightgbm(@moonboost.LightGBMModel, FixedArray[Double]) -> FixedArray[Double]
+
+pub fn predict_lightgbm_raw(@moonboost.LightGBMModel, FixedArray[Double]) -> FixedArray[Double]
 
 pub fn predict_margin(@moonboost.Model, FixedArray[Double]) -> FixedArray[Double]
 

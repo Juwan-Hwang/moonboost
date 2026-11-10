@@ -101,3 +101,47 @@ pub fn output_width(model : @moonboost.Model) -> Int32 {
 pub fn num_features(model : @moonboost.Model) -> Int32 {
   model.num_feature
 }
+
+///|
+/// Parse a LightGBM text model. Returns `undefined` if it cannot be loaded;
+/// `last_error()` then says why.
+#export_name("load_lightgbm")
+pub fn load_lightgbm(text : String) -> @moonboost.LightGBMModel? {
+  try {
+    let m = @moonboost.LightGBMModel::from_text(text)
+    error.val = ""
+    Some(m)
+  } catch {
+    @moonboost.InvalidModel(msg) => {
+      error.val = "invalid model: " + msg
+      None
+    }
+    @moonboost.Unsupported(msg) => {
+      error.val = "unsupported: " + msg
+      None
+    }
+  }
+}
+
+///|
+/// LightGBM predictions for one row, as its `predict` returns them. LightGBM
+/// works in doubles, so the row is used as given.
+#export_name("predict_lightgbm")
+pub fn predict_lightgbm(
+  model : @moonboost.LightGBMModel,
+  row : FixedArray[Double],
+) -> FixedArray[Double] {
+  let out = model.predict(row[:])
+  FixedArray::makei(out.length(), i => out[i])
+}
+
+///|
+/// LightGBM raw scores for one row (`predict(raw_score=True)`).
+#export_name("predict_lightgbm_raw")
+pub fn predict_lightgbm_raw(
+  model : @moonboost.LightGBMModel,
+  row : FixedArray[Double],
+) -> FixedArray[Double] {
+  let out = model.predict_raw(row[:])
+  FixedArray::makei(out.length(), i => out[i])
+}

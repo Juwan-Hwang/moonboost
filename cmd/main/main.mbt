@@ -15,7 +15,9 @@ const USAGE : String =
   #|bench times batch prediction and prints rows per second and the
   #|average latency per row, then the latency of one row at a time.
   #|
-  #|Models are XGBoost JSON files (Booster.save_model("model.json")).
+  #|Models are XGBoost JSON files (Booster.save_model("model.json")) or
+  #|LightGBM text files (Booster.save_model("model.txt")); bench is for
+  #|XGBoost models.
   #|Empty cells, NA and NaN in the CSV are treated as missing.
 
 ///|
@@ -34,8 +36,31 @@ fn load_model(path : String) -> @moonboost.Model raise {
 }
 
 ///|
+/// A LightGBM text model starts with the line `tree`.
+fn is_lightgbm(text : String) -> Bool {
+  text.trim_start(chars=" \t\r\n").has_prefix("tree")
+}
+
+///|
+fn lgb_info(m : @moonboost.LightGBMModel) -> Unit {
+  println("format:      LightGBM")
+  println("objective:   \{m.objective}")
+  println("trees:       \{m.num_trees()}")
+  println("outputs:     \{m.num_tree_per_iteration}")
+  println("features:    \{m.num_feature}")
+  if m.feature_names.length() > 0 {
+    println("names:       \{m.feature_names.join(",")}")
+  }
+}
+
+///|
 fn info(path : String) -> Unit raise {
-  let m = load_model(path)
+  let text = @fs.read_file_to_string(path)
+  if is_lightgbm(text) {
+    lgb_info(@moonboost.LightGBMModel::from_text(text))
+    return
+  }
+  let m = @moonboost.Model::from_xgboost_json(text)
   println("objective:   \{m.objective.name()}")
   if m.linear.length() > 0 {
     println("booster:     gblinear")
@@ -63,11 +88,16 @@ fn predict(args : ArrayView[String]) -> Unit raise {
     raise CliError("predict needs <model.json> <data.csv>")
   }
   let header = args.contains("--header")
-  let model = load_model(files[0])
+  let text = @fs.read_file_to_string(files[0])
   let data = @moonboost.DenseMatrix::from_csv(
     @fs.read_file_to_string(files[1]),
     header~,
   )
+  if is_lightgbm(text) {
+    lgb_predict(@moonboost.LightGBMModel::from_text(text), data, args)
+    return
+  }
+  let model = @moonboost.Model::from_xgboost_json(text)
   if data.cols != model.num_feature {
     raise CliError(
       "data has \{data.cols} columns but model expects \{model.num_feature}",
@@ -81,6 +111,32 @@ fn predict(args : ArrayView[String]) -> Unit raise {
       join_floats(model.predict_margin(row))
     } else {
       join_floats(model.predict(row))
+    }
+    println(line)
+  }
+}
+
+///|
+/// LightGBM reads inputs as doubles. CSV values are parsed into float32
+/// cells, so a value with more digits than float32 holds is rounded first.
+fn lgb_predict(
+  model : @moonboost.LightGBMModel,
+  data : @moonboost.DenseMatrix,
+  args : ArrayView[String],
+) -> Unit raise {
+  if data.cols != model.num_feature {
+    raise CliError(
+      "data has \{data.cols} columns but model expects \{model.num_feature}",
+    )
+  }
+  for i in 0..<data.rows {
+    let row = data.row(i).map(x => x.to_double())
+    let line = if args.contains("--leaf") {
+      model.predict_leaf(row).map(x => x.to_string()).join(",")
+    } else if args.contains("--margin") {
+      model.predict_raw(row).map(x => x.to_string()).join(",")
+    } else {
+      model.predict(row).map(x => x.to_string()).join(",")
     }
     println(line)
   }

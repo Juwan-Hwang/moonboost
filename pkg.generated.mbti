@@ -33,6 +33,32 @@ pub fn DenseMatrix::from_fixed(FixedArray[Float], cols~ : Int32) -> Self raise M
 pub fn DenseMatrix::new(Array[Float], cols~ : Int32) -> Self raise ModelError
 pub fn DenseMatrix::row(Self, Int32) -> ArrayView[Float]
 
+pub struct LightGBMModel {
+  trees : Array[LightGBMTree]
+  num_class : Int32
+  num_tree_per_iteration : Int32
+  num_feature : Int32
+  objective : String
+  feature_names : Array[String]
+  average_output : Bool
+}
+pub fn LightGBMModel::from_text(StringView) -> Self raise ModelError
+pub fn LightGBMModel::num_trees(Self) -> Int32
+pub fn LightGBMModel::predict(Self, ArrayView[Double]) -> Array[Double]
+pub fn LightGBMModel::predict_leaf(Self, ArrayView[Double]) -> Array[Int32]
+pub fn LightGBMModel::predict_raw(Self, ArrayView[Double]) -> Array[Double]
+
+pub struct LightGBMTree {
+  split_feature : Array[Int32]
+  threshold : Array[Double]
+  decision_type : Array[Int32]
+  left : Array[Int32]
+  right : Array[Int32]
+  leaf_value : Array[Double]
+  cat_boundaries : Array[Int32]
+  cat_threshold : Array[UInt32]
+}
+
 pub struct Model {
   trees : Array[Tree]
   tree_group : Array[Int32]

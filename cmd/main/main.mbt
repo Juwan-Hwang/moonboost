@@ -16,8 +16,7 @@ const USAGE : String =
   #|average latency per row, then the latency of one row at a time.
   #|
   #|Models are XGBoost JSON files (Booster.save_model("model.json")) or
-  #|LightGBM text files (Booster.save_model("model.txt")); bench is for
-  #|XGBoost models.
+  #|LightGBM text files (Booster.save_model("model.txt")).
   #|Empty cells, NA and NaN in the CSV are treated as missing.
 
 ///|
@@ -161,6 +160,32 @@ fn bench(args : ArrayView[String]) -> Unit raise {
   }
   if files.length() != 2 {
     raise CliError("bench needs <model.json> <data.csv>")
+  }
+  let text0 = @fs.read_file_to_string(files[0])
+  if is_lightgbm(text0) {
+    let m = @moonboost.LightGBMModel::from_text(text0)
+    let data = @moonboost.DenseMatrix::from_csv(
+      @fs.read_file_to_string(files[1]),
+      header=args.contains("--header"),
+    )
+    let rowsd = Array::makei(data.rows, r => data.row(r).map(x => x.to_double()))
+    let mut check = m.predict_batch(data)[0]
+    let t2 = @env.now()
+    for _ in 0..<repeat {
+      check = check + m.predict_batch(data)[0]
+    }
+    let t3 = @env.now()
+    for r in rowsd {
+      check = check + m.predict(r)[0]
+    }
+    let t4 = @env.now()
+    let n = data.rows.to_double() * repeat.to_double()
+    println("latency:    \{(t3 - t2).to_double() * 1000.0 / n} us/row")
+    println(
+      "single:     \{(t4 - t3).to_double() * 1000.0 / data.rows.to_double()} us/row",
+    )
+    println("checksum:   \{check}")
+    return
   }
   let t0 = @env.now()
   let model = load_model(files[0])

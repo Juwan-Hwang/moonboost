@@ -28,6 +28,10 @@ pub struct LightGBMModel {
   objective : String
   feature_names : Array[String]
   average_output : Bool
+  priv fast : LgbFast?
+  // the objective's name and `sigmoid:` parameter, parsed once
+  priv obj_name : String
+  priv sigmoid : Double
 }
 
 ///|
@@ -250,6 +254,7 @@ pub fn LightGBMModel::from_text(
       }
     }
   }
+  let objective = header.get("objective").unwrap_or("")
   let feature_names = match header.get("feature_names") {
     Some(s) =>
       s.split(" ").filter(x => x != "").map(x => x.to_owned()).to_array()
@@ -260,9 +265,12 @@ pub fn LightGBMModel::from_text(
     num_class,
     num_tree_per_iteration: per_iter,
     num_feature,
-    objective: header.get("objective").unwrap_or(""),
+    objective,
     feature_names,
     average_output: header.contains("average_output"),
+    fast: LgbFast::build(trees, num_feature, per_iter),
+    obj_name: objective.split(" ").next().map(x => x.to_owned()).unwrap_or(""),
+    sigmoid: lgb_param(objective, "sigmoid", 1.0),
   }
 }
 
@@ -344,8 +352,17 @@ pub fn LightGBMModel::predict_raw(
   self : LightGBMModel,
   row : ArrayView[Double],
 ) -> Array[Double] {
-  let x = self.lgb_row(row)
   let k = self.num_tree_per_iteration
+  if self.fast is Some(f) {
+    let w = f.width()
+    let ranks = FixedArray::make(if f.by_value { 0 } else { w }, 0)
+    let values = FixedArray::make(if f.by_value { w } else { 0 }, 0.0)
+    f.slots_of_doubles(row, ranks, values)
+    let m = FixedArray::make(k, 0.0)
+    f.accumulate(ranks, values, 1, m)
+    return Array::makei(k, i => m[i])
+  }
+  let x = self.lgb_row(row)
   let out = Array::make(k, 0.0)
   for i, t in self.trees {
     out[i % k] = out[i % k] + t.leaf_value[t.leaf(x)]
@@ -373,6 +390,14 @@ pub fn LightGBMModel::predict(
   row : ArrayView[Double],
 ) -> Array[Double] {
   let out = self.predict_raw(row)
+  self.transform(out)
+  out
+}
+
+///|
+/// Raw scores to predictions, in place: the average over rounds for a
+/// random forest, then the objective's output transform.
+fn LightGBMModel::transform(self : LightGBMModel, out : Array[Double]) -> Unit {
   let k = self.num_tree_per_iteration
   if self.average_output && self.trees.length() > 0 {
     let rounds = (self.trees.length() / k).to_double()
@@ -380,12 +405,8 @@ pub fn LightGBMModel::predict(
       out[g] = out[g] / rounds
     }
   }
-  let name = match self.objective.split(" ").next() {
-    Some(s) => s.to_owned()
-    None => ""
-  }
-  let sigmoid = lgb_param(self.objective, "sigmoid", 1.0)
-  match name {
+  let sigmoid = self.sigmoid
+  match self.obj_name {
     "binary" | "multiclassova" =>
       for i in 0..<out.length() {
         out[i] = 1.0 / (1.0 + lgb_exp(-sigmoid * out[i]))
@@ -414,6 +435,81 @@ pub fn LightGBMModel::predict(
       out[0] = if v > 0.0 { v * v } else if v < 0.0 { -(v * v) } else { 0.0 }
     }
     _ => ()
+  }
+}
+
+///|
+/// Predictions for every row of `data`, `num_tree_per_iteration` values per
+/// row (row-major). Same results as `predict` on each row.
+pub fn LightGBMModel::predict_batch(
+  self : LightGBMModel,
+  data : DenseMatrix,
+) -> Array[Double] {
+  let k = self.num_tree_per_iteration
+  let out = Array::make(data.rows * k, 0.0)
+  match self.fast {
+    Some(f) if f.heap_depth > 0 && k == 1 => {
+      let block = 64
+      let vals = FixedArray::make(block * f.width(), (0.0 : Float))
+      let m = FixedArray::make(block, 0.0)
+      let row = [0.0]
+      let mut start = 0
+      while start < data.rows {
+        let n = if data.rows - start < block {
+          data.rows - start
+        } else {
+          block
+        }
+        f.float_slots(data.data, data.cols, start, n, vals)
+        m.fill(0.0)
+        f.accumulate_fheap(vals, n, m)
+        for r in 0..<n {
+          row[0] = m[r]
+          self.transform(row)
+          out[start + r] = row[0]
+        }
+        start += n
+      }
+    }
+    Some(f) => {
+      let block = 64
+      let w = f.width()
+      let ranks = FixedArray::make(if f.by_value { 0 } else { block * w }, 0)
+      let values = FixedArray::make(if f.by_value { block * w } else { 0 }, 0.0)
+      let m = FixedArray::make(block * k, 0.0)
+      let cols = data.cols
+      let mut start = 0
+      while start < data.rows {
+        let n = if data.rows - start < block {
+          data.rows - start
+        } else {
+          block
+        }
+        for r in 0..<n {
+          f.slots_of_floats(data.data, start + r, cols, ranks, values, r * w)
+        }
+        m.fill(0.0)
+        f.accumulate(ranks, values, n, m)
+        let row = Array::make(k, 0.0)
+        for r in 0..<n {
+          for g in 0..<k {
+            row[g] = m[r * k + g]
+          }
+          self.transform(row)
+          for g in 0..<k {
+            out[(start + r) * k + g] = row[g]
+          }
+        }
+        start += n
+      }
+    }
+    None =>
+      for r in 0..<data.rows {
+        let p = self.predict(data.row(r).map(x => x.to_double()))
+        for g in 0..<k {
+          out[r * k + g] = p[g]
+        }
+      }
   }
   out
 }

@@ -41,10 +41,12 @@ pub struct LightGBMModel {
   objective : String
   feature_names : Array[String]
   average_output : Bool
+  // private fields
 }
 pub fn LightGBMModel::from_text(StringView) -> Self raise ModelError
 pub fn LightGBMModel::num_trees(Self) -> Int32
 pub fn LightGBMModel::predict(Self, ArrayView[Double]) -> Array[Double]
+pub fn LightGBMModel::predict_batch(Self, DenseMatrix) -> Array[Double]
 pub fn LightGBMModel::predict_leaf(Self, ArrayView[Double]) -> Array[Int32]
 pub fn LightGBMModel::predict_raw(Self, ArrayView[Double]) -> Array[Double]
 

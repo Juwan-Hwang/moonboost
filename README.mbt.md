@@ -233,6 +233,48 @@ Leaves are still added in tree order in float32, which is what keeps the
 results identical. Models with categorical splits use the verified kernel.
 The JS bundle minified with esbuild is 181 KB, 56 KB gzipped, with no other runtime.
 
+### Against compiled engines
+
+TL2cgen (Treelite's C code generator) and lleaves (LLVM-compiled LightGBM)
+turn a model into machine code ahead of time. Same VM, one thread, 10,000
+rows, µs per row in batch; each engine's predictions compared bit for bit
+with the library that trained the model.
+
+XGBoost models (the ones above). TL2cgen 1.1.0 C code built with `gcc -O3
+-march=native` in 64 translation units, best of `quantize` on and off;
+`bench/tl2cgen_bench.sh`:
+
+| Model | moonboost native | TL2cgen | XGBoost 3.4.1 C API |
+|---|---|---|---|
+| 100 trees, depth 4 | 0.60 | 1.68 | 1.03 |
+| 500 trees, depth 8 | 3.5 | 23.5 | 12.5 |
+| 1000 trees, depth 10 | 8.2 | 104 | 34.8 |
+| equal to XGBoost | 10,000 / 10,000 | 6,355 to 7,121 / 10,000 | |
+
+The generated C for the two larger models takes about 1 and 3 to 4 minutes
+to compile on this 2-core VM.
+
+LightGBM models of the same shape (binary, 32 features, 5% missing,
+`num_leaves = 2^depth`; `bench/lgb_models.py`). lleaves 1.3.0 is timed
+through its Python `predict` on the whole batch (`n_jobs=1`);
+`bench/lleaves_bench.py`:
+
+| Model | moonboost native | lleaves |
+|---|---|---|
+| 100 trees, depth 4 | 0.66 | 0.96 |
+| 500 trees, depth 8 | 3.9 | 12.9 |
+| 1000 trees, depth 10 | 29 | not measured (compiling took over 20 minutes) |
+| equal to LightGBM | 10,000 / 10,000 | 5,262 and 5,284 / 10,000 |
+
+moonboost needs no compile step: a LightGBM model loads into the same
+branch-free walk as XGBoost models, with doubles where LightGBM uses them.
+Each feature value is turned once per row into the number every split on it
+compares (a missing value or zero that a split sends one way by rule
+becomes ±infinity), trees up to 10 levels are laid out as implicit heaps,
+and float inputs walk a packed copy where each double threshold is replaced
+by the largest float not above it, which decides `x <= t` exactly for any
+float `x`. Larger forests compare integer ranks of the values instead.
+
 ## Usage
 
 Add the package:
@@ -284,6 +326,9 @@ fn predict_lightgbm(text : String) -> Unit raise {
   let raw = model.predict_raw(row) // predict(raw_score=True)
   let leaves = model.predict_leaf(row) // predict(pred_leaf=True)
   println("\{probs} \{raw} \{leaves}")
+  // many float rows at once, row-major, num_tree_per_iteration values per row
+  let data = @moonboost.DenseMatrix::new([5.1, 3.5, 1.4, 0.2], cols=4)
+  println(model.predict_batch(data))
 }
 ```
 

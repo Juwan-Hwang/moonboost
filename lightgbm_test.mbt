@@ -16,7 +16,8 @@ struct LgbFixture {
 ///|
 /// Raw scores, final predictions and leaf indices must all match LightGBM
 /// bit for bit (predictions go through glibc's `exp`, which `lgb_exp`
-/// reproduces).
+/// reproduces). `predict_batch` must agree with `predict` on the same rows
+/// read as floats.
 fn check_lgb(f : LgbFixture) -> Unit raise {
   let model = @moonboost.LightGBMModel::from_text(f.model)
   let x = f.x.map(b => b.reinterpret_as_double())
@@ -45,6 +46,25 @@ fn check_lgb(f : LgbFixture) -> Unit raise {
     for t in 0..<f.num_trees {
       if leaf[t] != f.leaf[r * f.num_trees + t] {
         fail("\{f.name}: row \{r} tree \{t} leaf \{leaf[t]}")
+      }
+    }
+  }
+  // the batch path, on the inputs rounded to float
+  let xf = x.map(v => Float::from_double(v))
+  let batch = model.predict_batch(
+    @moonboost.DenseMatrix::new(xf, cols=f.num_feature),
+  )
+  for r in 0..<rows {
+    let row = xf[r * f.num_feature:(r + 1) * f.num_feature].map(v => {
+      v.to_double()
+    })
+    let p = model.predict(row)
+    for k in 0..<f.width {
+      if batch[r * f.width + k].reinterpret_as_uint64() !=
+        p[k].reinterpret_as_uint64() {
+        fail(
+          "\{f.name}: row \{r} class \{k} batch \{batch[r * f.width + k]} != \{p[k]}",
+        )
       }
     }
   }

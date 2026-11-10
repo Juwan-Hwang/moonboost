@@ -179,6 +179,28 @@ WebAssembly build is `ort.wasm.min.mjs` (54 KB) plus
 gzipped). Model files are smaller in ONNX (97 KB against 223 KB of JSON for
 the small model).
 
+The same comparison in a browser, `bench/browser_bench.mjs`: headless
+Chromium 141 through Playwright, the files served from localhost, a fresh
+browser context for every run, one thread each. Cold start here also
+includes fetching the model. Medians of three runs:
+
+| Model | | moonboost (JS) | onnxruntime-web 1.31.1 (wasm) |
+|---|---|---|---|
+| 100 trees, depth 4 | cold start | 59 ms | 466 ms |
+| | batch, µs/row | 0.99 | 3.1 |
+| | one row per call, µs | 4.7 | 34 |
+| | probabilities equal to XGBoost's | 10,000 / 10,000 | 5,776 / 10,000 |
+| 500 trees, depth 8 | cold start | 331 ms | 792 ms |
+| | batch, µs/row | 6.1 | 27.6 |
+| | one row per call, µs | 14.4 | 121 |
+| | probabilities equal to XGBoost's | 10,000 / 10,000 | 5,037 / 10,000 |
+| 1000 trees, depth 10 | cold start | 526 ms | 1,536 ms |
+| | batch, µs/row | 16.0 | 61.6 |
+| | one row per call, µs | 75 | 336 |
+| | probabilities equal to XGBoost's | 10,000 / 10,000 | 5,053 / 10,000 |
+
+XGBoost has no browser build; it is compared natively in the tables above.
+
 How the batch path works (`lockstep.mbt`):
 
 - **Ranks instead of floats.** The distinct split thresholds of each feature

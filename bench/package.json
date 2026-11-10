@@ -1,8 +1,9 @@
 {
   "private": true,
   "type": "module",
-  "description": "Benchmark dependencies for bench/web_bench.mjs",
+  "description": "Benchmark dependencies for bench/web_bench.mjs and bench/browser_bench.mjs",
   "devDependencies": {
-    "onnxruntime-web": "1.31.1"
+    "onnxruntime-web": "1.31.1",
+    "playwright": "1.56.0"
   }
 }

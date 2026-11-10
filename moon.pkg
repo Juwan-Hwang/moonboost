@@ -19,6 +19,8 @@ options(
     "lockstep_cmp_native.mbt": [ "native" ],
     "lockstep_cmp_branchfree.mbt": [ "js", "wasm", "wasm-gc" ],
     "lockstep_nodes_js.mbt": [ "js" ],
+    "lgb_exp_native.mbt": [ "native" ],
+    "lgb_exp_soft.mbt": [ "not", "native" ],
     "lockstep_buf.mbt": [ "not", "js" ],
     "lockstep_buf_js.mbt": [ "js" ],
     "xgboost_src.mbt": [ "not", "js" ],

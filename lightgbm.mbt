@@ -388,11 +388,11 @@ pub fn LightGBMModel::predict(
   match name {
     "binary" | "multiclassova" =>
       for i in 0..<out.length() {
-        out[i] = 1.0 / (1.0 + @math.exp(-sigmoid * out[i]))
+        out[i] = 1.0 / (1.0 + lgb_exp(-sigmoid * out[i]))
       }
-    "cross_entropy" => out[0] = 1.0 / (1.0 + @math.exp(-out[0]))
-    "cross_entropy_lambda" => out[0] = @math.ln_1p(@math.exp(out[0]))
-    "poisson" | "gamma" | "tweedie" => out[0] = @math.exp(out[0])
+    "cross_entropy" => out[0] = 1.0 / (1.0 + lgb_exp(-out[0]))
+    "cross_entropy_lambda" => out[0] = @math.ln_1p(lgb_exp(out[0]))
+    "poisson" | "gamma" | "tweedie" => out[0] = lgb_exp(out[0])
     "multiclass" => {
       let mut wmax = out[0]
       for v in out {
@@ -402,7 +402,7 @@ pub fn LightGBMModel::predict(
       }
       let mut wsum = 0.0
       for i in 0..<out.length() {
-        out[i] = @math.exp(out[i] - wmax)
+        out[i] = lgb_exp(out[i] - wmax)
         wsum = wsum + out[i]
       }
       for i in 0..<out.length() {

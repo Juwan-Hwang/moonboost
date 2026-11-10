@@ -80,14 +80,18 @@ from moonboost) in the last bit.
 
 LightGBM models are checked the same way against LightGBM 4.7.0
 (`tools/gen_lgb_fixtures.py`, float64 bit patterns): raw scores and leaf
-indices bit for bit, final predictions within 2 ulp. The cases cover
+indices bit for bit, and final predictions bit for bit too. The cases cover
 regression (also with `reg_sqrt`), binary (also with a `sigmoid` parameter),
 `multiclass`, `multiclassova`, Poisson, Gamma, Tweedie, both cross-entropy
 objectives, zeros as missing values, `use_missing=false`, categorical
 features with missing and negative codes, and random forest mode. LightGBM
 compares doubles (`x <= threshold`), turns NaN into 0 unless the split
 handles NaN, reads values within 1e-35 of zero as zero, and adds trees in
-double; moonboost does the same.
+double; moonboost does the same. Its sigmoid, softmax and exponential
+outputs call the C library's `exp`, which is not the same function on
+every platform; moonboost calls the C `exp` on native builds and, on the
+web targets, a port of glibc's (the x86-64 FMA build), checked bit for bit
+against glibc on 2,000 inputs including the overflow and subnormal ranges.
 
 ## Verified kernel
 
@@ -333,4 +337,7 @@ python3 tools/gen_demo.py && sh tools/build_demo.sh   # rebuild the browser demo
 Apache-2.0. moonboost reads the XGBoost JSON and LightGBM text model formats
 and follows their prediction semantics; no XGBoost or LightGBM source code is
 included. XGBoost is Apache-2.0, © the XGBoost contributors. LightGBM is MIT,
-© Microsoft Corporation and the LightGBM developers.
+© Microsoft Corporation and the LightGBM developers. `lgb_exp.mbt` ports
+the double-precision `exp` of Arm's optimized-routines (as used by glibc),
+MIT OR Apache-2.0 WITH LLVM-exception, © Arm Limited; its table and
+coefficients are copied from glibc 2.41's x86-64 `libm`.

@@ -14,13 +14,13 @@ struct LgbFixture {
 }
 
 ///|
-/// Raw scores and leaf indices must match LightGBM bit for bit. Final
-/// predictions pass through libm `exp`, so they are compared within 2 ulp.
+/// Raw scores, final predictions and leaf indices must all match LightGBM
+/// bit for bit (predictions go through glibc's `exp`, which `lgb_exp`
+/// reproduces).
 fn check_lgb(f : LgbFixture) -> Unit raise {
   let model = @moonboost.LightGBMModel::from_text(f.model)
   let x = f.x.map(b => b.reinterpret_as_double())
   let rows = x.length() / f.num_feature
-  let mut max_ulp = 0L
   for r in 0..<rows {
     let row = x[r * f.num_feature:(r + 1) * f.num_feature]
     let raw = model.predict_raw(row)
@@ -34,10 +34,11 @@ fn check_lgb(f : LgbFixture) -> Unit raise {
     }
     let p = model.predict(row)
     for k in 0..<f.width {
-      let want = f.pred[r * f.width + k].reinterpret_as_int64()
-      let ulp = (p[k].reinterpret_as_int64() - want).abs()
-      if ulp > max_ulp {
-        max_ulp = ulp
+      let want = f.pred[r * f.width + k]
+      if p[k].reinterpret_as_uint64() != want {
+        fail(
+          "\{f.name}: row \{r} class \{k} prediction \{p[k]} != \{want.reinterpret_as_double()}",
+        )
       }
     }
     let leaf = model.predict_leaf(row)
@@ -46,9 +47,6 @@ fn check_lgb(f : LgbFixture) -> Unit raise {
         fail("\{f.name}: row \{r} tree \{t} leaf \{leaf[t]}")
       }
     }
-  }
-  if max_ulp > 2L {
-    fail("\{f.name}: predictions differ by \{max_ulp} ulp")
   }
 }
 

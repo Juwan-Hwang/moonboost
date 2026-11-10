@@ -161,9 +161,11 @@ fn bench(args : ArrayView[String]) -> Unit raise {
   if files.length() != 2 {
     raise CliError("bench needs <model.json> <data.csv>")
   }
+  let tl = @env.now()
   let text0 = @fs.read_file_to_string(files[0])
   if is_lightgbm(text0) {
     let m = @moonboost.LightGBMModel::from_text(text0)
+    println("load:       \{(@env.now() - tl).to_double()} ms")
     let data = @moonboost.DenseMatrix::from_csv(
       @fs.read_file_to_string(files[1]),
       header=args.contains("--header"),

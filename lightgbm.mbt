@@ -40,43 +40,115 @@ pub struct LightGBMModel {
 let lgb_zero : Double = Float::from_double(1.0e-35).to_double()
 
 ///|
+/// Tree fields that loading reads; the rest (gains, counts, weights) are
+/// skipped.
+fn lgb_tree_key(key : StringView) -> Bool {
+  match key {
+    "num_leaves"
+    | "num_cat"
+    | "split_feature"
+    | "threshold"
+    | "decision_type"
+    | "left_child"
+    | "right_child"
+    | "leaf_value"
+    | "cat_boundaries"
+    | "cat_threshold"
+    | "is_linear" => true
+    _ => false
+  }
+}
+
+///|
 fn lgb_values(
-  fields : Map[String, String],
+  fields : Map[String, StringView],
   key : String,
-) -> Array[String] raise ModelError {
+) -> Array[StringView] raise ModelError {
   match fields.get(key) {
-    Some(s) =>
-      s.split(" ").filter(x => x != "").map(x => x.to_owned()).to_array()
+    Some(s) => s.split(" ").filter(x => x != "").to_array()
     None => raise InvalidModel("LightGBM tree is missing `\{key}`")
   }
 }
 
 ///|
 fn lgb_ints(
-  fields : Map[String, String],
+  fields : Map[String, StringView],
   key : String,
 ) -> Array[Int32] raise ModelError {
+  let s = match fields.get(key) {
+    Some(s) => s
+    None => raise InvalidModel("LightGBM tree is missing `\{key}`")
+  }
   let out = []
-  for v in lgb_values(fields, key) {
-    out.push(
-      @string.parse_int(v) catch {
-        _ => raise InvalidModel("bad integer in `\{key}`: \{v}")
-      },
-    )
+  let n = s.length()
+  let mut i = 0
+  while i < n {
+    while i < n && s.unsafe_get(i) == ' ' {
+      i += 1
+    }
+    let start = i
+    let neg = i < n && s.unsafe_get(i) == '-'
+    if neg {
+      i += 1
+    }
+    let mut v = 0
+    let mut ok = i < n
+    while i < n && s.unsafe_get(i) != ' ' {
+      let c = s.unsafe_get(i).to_int() - '0'.to_int()
+      if c < 0 || c > 9 || v > 214748364 {
+        ok = false
+      }
+      v = v * 10 + c
+      i += 1
+    }
+    if start == i {
+      break
+    }
+    if i == start + (if neg { 1 } else { 0 }) {
+      ok = false
+    }
+    if !ok {
+      // not a plain decimal integer: let the general parser judge it
+      let t = s.unsafe_view(start~, end=i)
+      out.push(
+        @string.parse_int(t) catch {
+          _ => raise InvalidModel("bad integer in `\{key}`: \{t}")
+        },
+      )
+    } else {
+      out.push(if neg { -v } else { v })
+    }
   }
   out
 }
 
 ///|
 fn lgb_doubles(
-  fields : Map[String, String],
+  fields : Map[String, StringView],
   key : String,
 ) -> Array[Double] raise ModelError {
+  let s = match fields.get(key) {
+    Some(s) => s
+    None => raise InvalidModel("LightGBM tree is missing `\{key}`")
+  }
   let out = []
-  for v in lgb_values(fields, key) {
+  let n = s.length()
+  let mut i = 0
+  while i < n {
+    while i < n && s.unsafe_get(i) == ' ' {
+      i += 1
+    }
+    let start = i
+    while i < n && s.unsafe_get(i) != ' ' {
+      i += 1
+    }
+    if start == i {
+      break
+    }
+    let t = s.unsafe_view(start~, end=i)
     out.push(
-      @string.parse_double(v) catch {
-        _ => raise InvalidModel("bad number in `\{key}`: \{v}")
+      @string.parse_double(t) catch {
+        _ => raise InvalidModel("bad number in `\{key}`: \{t}")
       },
     )
   }
@@ -84,7 +156,7 @@ fn lgb_doubles(
 }
 
 ///|
-fn lgb_tree(fields : Map[String, String]) -> LightGBMTree raise ModelError {
+fn lgb_tree(fields : Map[String, StringView]) -> LightGBMTree raise ModelError {
   let num_leaves = lgb_ints(fields, "num_leaves")
   if num_leaves.length() != 1 || num_leaves[0] < 1 {
     raise InvalidModel("bad `num_leaves`")
@@ -192,26 +264,26 @@ pub fn LightGBMModel::from_text(
   text : StringView,
 ) -> LightGBMModel raise ModelError {
   let header : Map[String, String] = Map([])
-  let blocks : Array[Map[String, String]] = []
-  let mut cur : Map[String, String]? = None
+  let blocks : Array[Map[String, StringView]] = []
+  let mut cur : Map[String, StringView]? = None
   for raw in text.split("\n") {
     let line = raw.trim(chars="\r ")
     if line.has_prefix("end of trees") {
       break
     }
     if line.has_prefix("Tree=") {
-      let m : Map[String, String] = Map([])
+      let m : Map[String, StringView] = Map([])
       blocks.push(m)
       cur = Some(m)
       continue
     }
     match line.find("=") {
       Some(i) => {
-        let key = line[:i].to_owned()
-        let value = line[i + 1:].to_owned()
+        let key = line[:i]
         match cur {
-          Some(m) => m[key] = value
-          None => header[key] = value
+          // a tree keeps only the fields prediction reads, without copying
+          Some(m) => if lgb_tree_key(key) { m[key.to_owned()] = line[i + 1:] }
+          None => header[key.to_owned()] = line[i + 1:].to_owned()
         }
       }
       // a bare flag such as `average_output`

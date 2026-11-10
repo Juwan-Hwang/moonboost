@@ -117,7 +117,8 @@ fn LgbFast::build(
   let slot : Array[Int32] = []
   let rank : Array[Int32] = []
   let thr : Array[Double] = []
-  let slot_id : Map[Int32, Int32] = Map([])
+  // slot of each (feature, variant), -1 until used
+  let slot_id = FixedArray::make(num_feature * LGB_SLOTS, -1)
   let slot_feature : Array[Int32] = []
   let slot_variant : Array[Int32] = []
   // a finite threshold beyond float range rules out walking by value
@@ -160,15 +161,14 @@ fn LgbFast::build(
       }
       left.push(base + queue.length())
       let key = f * LGB_SLOTS + s
-      let id = match slot_id.get(key) {
-        Some(i) => i
-        None => {
-          let i = slot_feature.length()
-          slot_id[key] = i
-          slot_feature.push(f)
-          slot_variant.push(s)
-          i
-        }
+      let id = if slot_id[key] >= 0 {
+        slot_id[key]
+      } else {
+        let i = slot_feature.length()
+        slot_id[key] = i
+        slot_feature.push(f)
+        slot_variant.push(s)
+        i
       }
       slot.push(id)
       // `x <= +inf` holds for every non-missing x; so does `x <= max`

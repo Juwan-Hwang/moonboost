@@ -311,8 +311,8 @@ Python `predict_proba` on the whole batch (`bench/onedal_bench.py`), as LightGBM
 | XGBoost model | moonboost native | oneDAL | XGBoost 3.4.1 C API | TL2cgen |
 |---|---|---|---|---|
 | 100 trees, depth 4 | 0.30 | 0.52 | 0.86 | 1.60 |
-| 500 trees, depth 8 | 4.4 | 5.1 | 8.8 | 28.7 |
-| 1000 trees, depth 10 | 10.6 | 13.2 | 25.7 | not measured |
+| 500 trees, depth 8 | 3.3 | 5.1 | 8.8 | 28.7 |
+| 1000 trees, depth 10 | 7.6 | 13.2 | 25.7 | not measured |
 | equal to XGBoost | 10,000 / 10,000 | 5,156 to 5,852 / 10,000 | | 6,355 to 7,121 / 10,000 |
 
 | LightGBM model | moonboost native | oneDAL | LightGBM 4.7.0 | lleaves |
@@ -325,6 +325,16 @@ Python `predict_proba` on the whole batch (`bench/onedal_bench.py`), as LightGBM
 oneDAL's differences from the original libraries are at most 2.2e-7. Every
 moonboost prediction on this machine matched XGBoost and LightGBM bit for
 bit, as on ARM. lleaves took over nine minutes to compile the 500-tree model.
+
+Loading, in ms (read the file, parse, build the prediction form; oneDAL's
+figure is its conversion from an already loaded booster):
+
+| Model file | moonboost native | XGBoost / LightGBM | oneDAL conversion |
+|---|---|---|---|
+| XGBoost, 500 trees (9.1 MB JSON) | 127 | 159 | 604 |
+| XGBoost, 1000 trees (19 MB JSON) | 269 | 370 | 1,927 |
+| LightGBM, 500 trees (text) | 55 | 38 | 2,048 |
+| LightGBM, 1000 trees (38 MB text) | 168 | 176 | 7,865 |
 
 ## Usage
 

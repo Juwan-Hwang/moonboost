@@ -328,6 +328,8 @@ fn Lockstep::build(trees : ArrayView[Tree], num_feature : Int32) -> Lockstep? {
       256
     } else if STREAM_BLOCK && total.to_int64() * 8L > 0x200000L {
       256
+    } else if ROWS8 {
+      256
     } else {
       BLOCK
     },
@@ -536,6 +538,10 @@ fn Lockstep::accumulate(
   let trees = self.roots.length()
   if n == 1 {
     nodes.single(self.roots, self.depth, tree_group, ranks, leaf_value, margin)
+    return
+  }
+  if ROWS8 {
+    self.accumulate_rows8(tree_group, groups, ranks, n, margin)
     return
   }
   for t = 0; t < trees; {
@@ -1618,4 +1624,99 @@ const VALUE_STEPS : Int32 = 32
 /// Whether batches walk row values against split values.
 fn Lockstep::walks_values(self : Lockstep) -> Bool {
   self.heap_thr.length() > 0 || self.vheap.length() > 0
+}
+
+///|
+/// `accumulate` one tree at a time, eight rows walking it side by side with
+/// their node ids in locals: no `idx` traffic, eight independent loads per
+/// level. Leaves are added in tree order.
+fn Lockstep::accumulate_rows8(
+  self : Lockstep,
+  tree_group : Array[Int32],
+  groups : Int32,
+  ranks : Buf,
+  n : Int32,
+  margin : FixedArray[Float],
+) -> Unit {
+  let width = 2 * self.num_feature
+  let nodes = self.nodes
+  let leaf_value = self.leaf_value
+  for t in 0..<self.roots.length() {
+    let root = self.roots[t]
+    let d = self.depth[t]
+    let g = tree_group[t]
+    let mut r = 0
+    while r + 8 <= n {
+      let b0 = r * width
+      let b1 = b0 + width
+      let b2 = b1 + width
+      let b3 = b2 + width
+      let b4 = b3 + width
+      let b5 = b4 + width
+      let b6 = b5 + width
+      let b7 = b6 + width
+      let mut i0 = root
+      let mut i1 = root
+      let mut i2 = root
+      let mut i3 = root
+      let mut i4 = root
+      let mut i5 = root
+      let mut i6 = root
+      let mut i7 = root
+      for _ in 0..<d {
+        i0 = nodes.step(i0, ranks, b0)
+        i1 = nodes.step(i1, ranks, b1)
+        i2 = nodes.step(i2, ranks, b2)
+        i3 = nodes.step(i3, ranks, b3)
+        i4 = nodes.step(i4, ranks, b4)
+        i5 = nodes.step(i5, ranks, b5)
+        i6 = nodes.step(i6, ranks, b6)
+        i7 = nodes.step(i7, ranks, b7)
+      }
+      let k = r * groups + g
+      margin.unsafe_set(
+        k + 0 * groups,
+        margin.unsafe_get(k + 0 * groups) + leaf_value.unsafe_get(i0),
+      )
+      margin.unsafe_set(
+        k + 1 * groups,
+        margin.unsafe_get(k + 1 * groups) + leaf_value.unsafe_get(i1),
+      )
+      margin.unsafe_set(
+        k + 2 * groups,
+        margin.unsafe_get(k + 2 * groups) + leaf_value.unsafe_get(i2),
+      )
+      margin.unsafe_set(
+        k + 3 * groups,
+        margin.unsafe_get(k + 3 * groups) + leaf_value.unsafe_get(i3),
+      )
+      margin.unsafe_set(
+        k + 4 * groups,
+        margin.unsafe_get(k + 4 * groups) + leaf_value.unsafe_get(i4),
+      )
+      margin.unsafe_set(
+        k + 5 * groups,
+        margin.unsafe_get(k + 5 * groups) + leaf_value.unsafe_get(i5),
+      )
+      margin.unsafe_set(
+        k + 6 * groups,
+        margin.unsafe_get(k + 6 * groups) + leaf_value.unsafe_get(i6),
+      )
+      margin.unsafe_set(
+        k + 7 * groups,
+        margin.unsafe_get(k + 7 * groups) + leaf_value.unsafe_get(i7),
+      )
+      r += 8
+    }
+    while r < n {
+      let b = r * width
+      let mut i = root
+      for _ in 0..<d {
+        i = nodes.step(i, ranks, b)
+      }
+      let k = r * groups + g
+      margin.unsafe_set(k, margin.unsafe_get(k) + leaf_value.unsafe_get(i))
+      r += 1
+    }
+  }
 }

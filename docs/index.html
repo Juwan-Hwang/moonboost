@@ -31,6 +31,10 @@
   .ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; }
   code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; background:#f1f3f7; padding: 1px 5px; border-radius: 4px; }
   a { color: var(--accent); }
+  .progress { margin-top: 14px; display: none; }
+  .progress.on { display: block; }
+  .progress progress { width: 100%; height: 10px; accent-color: var(--accent); }
+  .progress .small { margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -66,6 +70,10 @@
     <p class="small">Loads onnxruntime-web from a CDN with the same model converted to ONNX, and
       times both engines on the 2,000 blocks in this browser (one thread each).</p>
     <button id="race">Run the comparison</button>
+    <div class="progress" id="raceprog">
+      <progress id="racebar" max="100"></progress>
+      <div class="small" id="racestep"></div>
+    </div>
     <div id="raceout"></div>
   </section>
 
@@ -143,31 +151,64 @@ document.getElementById("check").innerHTML =
 // --- race against onnxruntime-web -------------------------------------------
 document.getElementById("race").onclick = async (ev) => {
   const btn = ev.target;
+  try {
+    await race(btn);
+  } catch (e) {
+    document.getElementById("raceprog").classList.remove("on");
+    document.getElementById("raceout").textContent = `The comparison stopped: ${e.message}`;
+    btn.disabled = false;
+  }
+};
+
+async function race(btn) {
   btn.disabled = true;
   const out = document.getElementById("raceout");
-  out.textContent = "Loading onnxruntime-web…";
-  const bestOf = async (f, k = 5) => { let b = Infinity; for (let i = 0; i < k; i++) { const s = performance.now(); await f(); b = Math.min(b, performance.now() - s); } return b; };
+  out.textContent = "";
+  const prog = document.getElementById("raceprog");
+  const bar = document.getElementById("racebar");
+  const step = document.getElementById("racestep");
+  prog.classList.add("on");
+  // let the browser paint before the next blocking stretch
+  const paint = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+  // progress in percent; null shows a moving bar while a download runs
+  const show = async (pct, text) => {
+    if (pct === null) bar.removeAttribute("value"); else bar.value = pct;
+    step.textContent = text;
+    await paint();
+  };
+  // best of k timed runs, moving the bar from `from` to `to` percent
+  const bestOf = async (f, k, from, to, text) => {
+    let b = Infinity;
+    for (let i = 0; i < k; i++) {
+      await show(from + (to - from) * i / k, `${text} (run ${i + 1} of ${k})`);
+      const s = performance.now(); await f(); b = Math.min(b, performance.now() - s);
+    }
+    return b;
+  };
+  await show(null, "Downloading onnxruntime-web (about 4 MB compressed)…");
   const rowsArr = Array.from({ length: n }, (_, i) => Array.from(x.subarray(i * cols, (i + 1) * cols)));
 
   let t0 = performance.now();
   const ort = await import("https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.wasm.min.mjs");
   ort.env.wasm.numThreads = 1;
   ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
+  await show(null, "Starting onnxruntime-web and loading the ONNX model…");
   const onnxBytes = new Uint8Array(await (await fetch("model.onnx")).arrayBuffer());
   const sess = await ort.InferenceSession.create(onnxBytes, { executionProviders: ["wasm"] });
   const ortRun = async (arr, m) => (await sess.run({ input: new ort.Tensor("float32", arr, [m, cols]) })).variable.data;
   await ortRun(x.subarray(0, cols), 1);
   const ortCold = performance.now() - t0;
-  out.textContent = "Timing…";
-
+  await show(20, "Checking onnxruntime-web against XGBoost…");
   const ortOut = await ortRun(x, n);
   let ortSame = 0;
   for (let i = 0; i < n; i++) if (Object.is(ortOut[i], expected[i])) ortSame++;
-  const mbBatch = await bestOf(() => mb.predict_batch(model, x, cols));
-  const ortBatch = await bestOf(() => ortRun(x, n));
+  const mbBatch = await bestOf(() => mb.predict_batch(model, x, cols), 5, 25, 40, "Timing moonboost on the batch");
+  const ortBatch = await bestOf(() => ortRun(x, n), 5, 40, 60, "Timing onnxruntime-web on the batch");
   const k = 500;
-  const mbOne = await bestOf(() => { for (let i = 0; i < k; i++) mb.predict(model, rowsArr[i]); }, 3);
-  const ortOne = await bestOf(async () => { for (let i = 0; i < k; i++) await ortRun(x.subarray(i * cols, (i + 1) * cols), 1); }, 3);
+  const mbOne = await bestOf(() => { for (let i = 0; i < k; i++) mb.predict(model, rowsArr[i]); }, 3, 60, 70, "Timing moonboost one row at a time");
+  const ortOne = await bestOf(async () => { for (let i = 0; i < k; i++) await ortRun(x.subarray(i * cols, (i + 1) * cols), 1); }, 3, 70, 100, "Timing onnxruntime-web one row at a time");
+  await show(100, "Done.");
+  prog.classList.remove("on");
   const us = (ms, m) => (ms * 1000 / m).toFixed(2) + " µs";
   out.innerHTML = `<table>
     <tr><th></th><th>moonboost</th><th>onnxruntime-web 1.31.1</th></tr>
@@ -177,7 +218,8 @@ document.getElementById("race").onclick = async (ev) => {
     <tr><td>Identical to XGBoost</td><td class="${same === n ? "ok" : "bad"}">${same} / ${n}</td><td class="${ortSame === n ? "ok" : "bad"}">${ortSame} / ${n}</td></tr>
   </table>`;
   btn.disabled = false;
-};
+  btn.textContent = "Run it again";
+}
 </script>
 </body>
 </html>

@@ -65,7 +65,12 @@ fn train_example(x : DenseMatrix, y : Array[Float]) -> Unit raise {
 
 Features are cut into at most `max_bin` bins at observed values, trees grow
 depth-wise on gradient histograms (the smaller child is built, the larger is
-the parent minus it), and each split learns where missing values go. The
+the parent minus it), and each split learns where missing values go.
+Gradient pairs are quantised per tree to integers packed into one 64-bit
+word, so a histogram slot is one integer add and the subtraction is exact
+(leaf values still use the exact gradient sums). Below depth 2 each subtree
+copies its rows' bins and gradients into a contiguous buffer, so deep,
+scattered nodes stay in cache. The
 result is an ordinary XGBoost JSON model: XGBoost loads it and predicts the
 same float32 bits as moonboost. Training is single-threaded.
 
@@ -78,6 +83,20 @@ values (`bench/train_data.py`, `bench/train_compare.py`; ARM sandbox):
 | Regression | 251 ms | 315 ms | RMSE 0.4327 / 0.4304 | 5,000 / 5,000 bit-identical |
 | Binary | 229 ms | 267 ms | log loss 0.1628 / 0.1632 | 5,000 / 5,000 |
 | 3 classes | 705 ms | 817 ms | log loss 0.2740 / 0.2747 | 15,000 / 15,000 |
+
+On the [GBM-perf](https://github.com/szilard/GBM-perf) airline data (1M
+training rows, 100k test rows, 100 rounds, depth 10, eta 0.1, one thread
+pinned to one core of an x86 AMD EPYC VM; the 8 categorical columns are
+label-encoded, which differs from GBM-perf's own setup), two runs each:
+
+| Library | Training time | Test AUC |
+|---|---|---|
+| moonboost native | 8.7 s, 9.1 s | 0.7537 |
+| XGBoost 3.4.1 `hist` | 9.1 s, 9.1 s | 0.7533 |
+| LightGBM 4.7.0 (`num_leaves=1024`, `max_depth=10`) | 6.8 s, 6.7 s | 0.7545 |
+
+moonboost is level with XGBoost here, and LightGBM is still about 30%
+faster (`bench/gbmperf_compare.py`).
 
 The same training runs in the browser through the ES module's `train`
 (the 3-class case takes 1.6 s in Node).

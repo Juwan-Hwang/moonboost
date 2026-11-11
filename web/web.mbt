@@ -166,3 +166,73 @@ pub fn predict_lightgbm_raw(
   let out = model.predict_raw(row[:])
   FixedArray::makei(out.length(), i => out[i])
 }
+
+///|
+/// Train a model in the page. `data` holds the rows one after another
+/// (an array of numbers or a `Float32Array`, `NaN` for missing), `labels` one
+/// label per row. The settings are XGBoost's `objective`, `num_class`,
+/// `num_round`, `max_depth` and `eta`; pass `-1` (or `""` for `objective`)
+/// to keep XGBoost's default.
+/// Returns the model as XGBoost JSON text (load it with `load_model`, or in
+/// XGBoost), or `undefined` with `last_error()` set.
+#export_name("train")
+pub fn train(
+  data : FixedArray[Double],
+  cols : Int32,
+  labels : FixedArray[Double],
+  objective : String,
+  num_class : Int32,
+  num_round : Int32,
+  max_depth : Int32,
+  eta : Double,
+) -> String? {
+  let d = @moonboost.TrainParams::default()
+  let params : @moonboost.TrainParams = {
+    ..d,
+    objective: if objective == "" {
+      d.objective
+    } else {
+      objective
+    },
+    num_class: if num_class < 0 {
+      d.num_class
+    } else {
+      num_class
+    },
+    num_round: if num_round < 0 {
+      d.num_round
+    } else {
+      num_round
+    },
+    max_depth: if max_depth < 0 {
+      d.max_depth
+    } else {
+      max_depth
+    },
+    eta: if eta < 0.0 {
+      d.eta
+    } else {
+      eta
+    },
+  }
+  try {
+    let m = @moonboost.DenseMatrix::from_fixed(to_float_matrix(data), cols~)
+    let y = to_float_matrix(labels)
+    let json = @moonboost.train_xgboost_json(
+      m,
+      Array::makei(y.length(), i => y[i]),
+      params~,
+    )
+    error.val = ""
+    Some(json)
+  } catch {
+    @moonboost.InvalidModel(msg) => {
+      error.val = "invalid input: " + msg
+      None
+    }
+    @moonboost.Unsupported(msg) => {
+      error.val = "unsupported: " + msg
+      None
+    }
+  }
+}

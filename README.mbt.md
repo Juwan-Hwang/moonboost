@@ -42,10 +42,45 @@ trust because it is tested against XGBoost itself.
 | ES module for browsers and Node (`web/`) | done |
 | Browser demo (`docs/`, GitHub Pages) | done |
 | XGBoost UBJSON models (`.ubj`) | done |
-| Training | planned |
+| Training: histogram trees for `reg:squarederror`, `binary:logistic`, `multi:softprob`, `multi:softmax`, written as XGBoost JSON | done |
 
 Later: multithreaded training and batch prediction, once MoonBit ships
 official support for parallelism. Everything here runs on one thread today.
+
+## Training
+
+```moonbit nocheck
+///|
+fn train_example(x : DenseMatrix, y : Array[Float]) -> Unit raise {
+  let params = {
+    ..TrainParams::default(),
+    objective: "binary:logistic",
+    num_round: 100,
+  }
+  let json = train_xgboost_json(x, y, params~) // save it; XGBoost loads it too
+  let model = Model::from_xgboost_json(json)
+  ignore(model.predict_batch(x))
+}
+```
+
+Features are cut into at most `max_bin` bins at observed values, trees grow
+depth-wise on gradient histograms (the smaller child is built, the larger is
+the parent minus it), and each split learns where missing values go. The
+result is an ordinary XGBoost JSON model: XGBoost loads it and predicts the
+same float32 bits as moonboost. Training is single-threaded.
+
+Against XGBoost 3.4.1 (`tree_method="hist"`, one thread, same depth, eta and
+bins), 100 rounds on 15,000 synthetic rows with 8 features and 5% missing
+values (`bench/train_data.py`, `bench/train_compare.py`; ARM sandbox):
+
+| Task | moonboost native | XGBoost | Test metric, moonboost / XGBoost | XGBoost on the moonboost model |
+|---|---|---|---|---|
+| Regression | 251 ms | 315 ms | RMSE 0.4327 / 0.4304 | 5,000 / 5,000 bit-identical |
+| Binary | 229 ms | 267 ms | log loss 0.1628 / 0.1632 | 5,000 / 5,000 |
+| 3 classes | 705 ms | 817 ms | log loss 0.2740 / 0.2747 | 15,000 / 15,000 |
+
+The same training runs in the browser through the ES module's `train`
+(the 3-class case takes 1.6 s in Node).
 
 ## Correctness
 
@@ -414,6 +449,9 @@ predict_batch(model, new Float32Array(rowMajorValues), 4); // 4 columns
 LightGBM models use `load_lightgbm(text)`, `predict_lightgbm(model, row)`
 and `predict_lightgbm_raw(model, row)`. An XGBoost `.ubj` file loads with
 `load_model_ubjson(bytes)`, where `bytes` is a `Uint8Array`.
+`train(rows, cols, labels, objective, num_class, num_round, max_depth, eta)`
+trains in the page and returns XGBoost JSON text (`-1` or `""` keeps a
+default).
 
 See `examples/node/iris.mjs`.
 
@@ -422,6 +460,7 @@ See `examples/node/iris.mjs`.
 ```
 moon run cmd/main --target js -- info examples/iris/model.json
 moon run cmd/main --target js -- predict examples/iris/model.json examples/iris/data.csv --header
+moon run cmd/main --target native -- train rows.csv labels.csv -o model.json --objective binary:logistic --rounds 100
 ```
 
 ```

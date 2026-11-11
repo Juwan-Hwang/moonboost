@@ -28,6 +28,8 @@ pub fn predict_lightgbm_raw(@moonboost.LightGBMModel, FixedArray[Double]) -> Fix
 
 pub fn predict_margin(@moonboost.Model, FixedArray[Double]) -> FixedArray[Double]
 
+pub fn train(FixedArray[Double], Int32, FixedArray[Double], String, Int32, Int32, Int32, Double) -> String?
+
 // Errors
 
 // Types and methods

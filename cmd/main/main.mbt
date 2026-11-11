@@ -6,6 +6,7 @@ const USAGE : String =
   #|  moonboost info    <model.json>
   #|  moonboost predict <model.json> <data.csv> [--header] [--margin] [--leaf]
   #|  moonboost bench   <model.json> <data.csv> [--header] [--repeat N]
+  #|  moonboost train   <data.csv> <labels.csv> -o <model.json> [options]
   #|
   #|predict prints one CSV line per input row:
   #|  default   final predictions (probabilities, values or class index)
@@ -15,13 +16,19 @@ const USAGE : String =
   #|bench times batch prediction and prints rows per second and the
   #|average latency per row, then the latency of one row at a time.
   #|
+  #|train options (XGBoost names and defaults):
+  #|  --objective reg:squarederror | binary:logistic | multi:softprob | multi:softmax
+  #|  --num-class K  --rounds 10  --depth 6  --eta 0.3  --lambda 1
+  #|  --gamma 0  --min-child-weight 1  --max-bin 256  --header
+  #|labels.csv holds one label per line. The model is written as XGBoost JSON.
+  #|
   #|Models are XGBoost JSON files (Booster.save_model("model.json")) or
   #|LightGBM text files (Booster.save_model("model.txt")).
   #|Empty cells, NA and NaN in the CSV are treated as missing.
 
 ///|
 let commands : Array[String] = [
-  "info", "predict", "bench", "help", "--help", "-h",
+  "info", "predict", "bench", "train", "help", "--help", "-h",
 ]
 
 ///|
@@ -243,6 +250,70 @@ fn bench(args : ArrayView[String]) -> Unit raise {
 }
 
 ///|
+fn train(args : ArrayView[String]) -> Unit raise {
+  let files : Array[String] = []
+  let mut p = @moonboost.TrainParams::default()
+  let mut out = ""
+  let mut header = false
+  let mut i = 0
+  while i < args.length() {
+    let a = args[i]
+    let next = () => {
+      if i + 1 >= args.length() {
+        raise CliError("\{a} needs a value")
+      }
+      args[i + 1]
+    }
+    let num = () => @string.parse_double(next())
+    match a {
+      "--header" => {
+        header = true
+        i += 1
+        continue
+      }
+      "-o" => out = next()
+      "--objective" => p = { ..p, objective: next(), }
+      "--num-class" => p = { ..p, num_class: @string.parse_int(next()), }
+      "--rounds" => p = { ..p, num_round: @string.parse_int(next()), }
+      "--depth" => p = { ..p, max_depth: @string.parse_int(next()), }
+      "--eta" => p = { ..p, eta: num(), }
+      "--lambda" => p = { ..p, lambda: num(), }
+      "--gamma" => p = { ..p, gamma: num(), }
+      "--min-child-weight" => p = { ..p, min_child_weight: num(), }
+      "--max-bin" => p = { ..p, max_bin: @string.parse_int(next()), }
+      _ => {
+        if a.has_prefix("-") {
+          raise CliError("unknown option \{a}")
+        }
+        files.push(a)
+        i += 1
+        continue
+      }
+    }
+    i += 2
+  }
+  if files.length() != 2 || out == "" {
+    raise CliError("train needs <data.csv> <labels.csv> -o <model.json>")
+  }
+  let data = @moonboost.DenseMatrix::from_csv(
+    @fs.read_file_to_string(files[0]),
+    header~,
+  )
+  let labels = @moonboost.DenseMatrix::from_csv(
+    @fs.read_file_to_string(files[1]),
+    header~,
+  )
+  let label = Array::makei(labels.rows, r => labels.row(r)[0])
+  let t0 = @env.now()
+  let json = @moonboost.train_xgboost_json(data, label, params=p)
+  let t1 = @env.now()
+  @fs.write_string_to_file(out, json)
+  println(
+    "trained \{data.rows} rows x \{data.cols} features in \{(t1 - t0).to_double()} ms",
+  )
+}
+
+///|
 fn main {
   let args = @env.args()
   // The runtime may prepend its own entries (e.g. `node main.js`), so start
@@ -258,6 +329,7 @@ fn main {
       "info" if rest.length() == 2 => info(rest[1])
       "predict" => predict(rest[1:])
       "bench" => bench(rest[1:])
+      "train" => train(rest[1:])
       "help" | "--help" | "-h" => println(USAGE)
       _ => raise CliError("unknown command; run `moonboost help`")
     }

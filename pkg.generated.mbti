@@ -10,6 +10,8 @@ pub fn category_key(Float) -> Int32
 
 pub fn float_key(Float) -> Int32
 
+pub fn train_xgboost_json(DenseMatrix, ArrayView[Float], params? : TrainParams) -> String raise ModelError
+
 // Errors
 #derive(Eq, @debug.Debug)
 pub(all) suberror ModelError {
@@ -83,6 +85,7 @@ pub fn Model::predict_batch(Self, DenseMatrix) -> Array[Float]
 pub fn Model::predict_leaf(Self, ArrayView[Float]) -> Array[Int32]
 pub fn Model::predict_margin(Self, ArrayView[Float]) -> Array[Float]
 pub fn Model::predict_one(Self, ArrayView[Float]) -> Float
+pub fn Model::train(DenseMatrix, ArrayView[Float], params? : TrainParams) -> Self raise ModelError
 
 #derive(Eq, @debug.Debug)
 pub(all) enum Objective {
@@ -99,6 +102,19 @@ pub fn Objective::name(Self) -> String
 pub fn Objective::not_equal(Self, Self) -> Bool
 pub fn Objective::to_repr(Self) -> @debug.Repr
 pub fn Objective::transform(Self, Array[Float]) -> Unit
+
+pub(all) struct TrainParams {
+  objective : String
+  num_class : Int32
+  num_round : Int32
+  max_depth : Int32
+  eta : Double
+  lambda : Double
+  gamma : Double
+  min_child_weight : Double
+  max_bin : Int32
+}
+pub fn TrainParams::default() -> Self
 
 pub struct Tree {
   left : Array[Int32]

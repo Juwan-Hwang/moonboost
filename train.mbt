@@ -44,8 +44,9 @@ pub fn TrainParams::default() -> TrainParams {
 }
 
 ///|
-/// Feature values cut into bins. `bins[r * cols + f]` is one more than the
-/// bin of row `r` in feature `f` (`0` when missing); a value `v` falls in bin `k` when
+/// Feature values cut into bins. `bins[r * cols + f]` is the histogram slot
+/// of row `r` in feature `f`: `cut_start[f] + 2 * f` when missing, then one
+/// per bin; `by_col[f * rows + r]` is one more than the bin (`0` missing); a value `v` falls in bin `k` when
 /// exactly `k` of the feature's cut points are `<= v`.
 priv struct Binned {
   cols : Int32
@@ -108,7 +109,9 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
     let hi = cuts.length()
     for r in 0..<rows {
       let v = m.data[r * cols + f]
-      if !v.is_nan() {
+      if v.is_nan() {
+        bins[r * cols + f] = (lo + 2 * f).to_uint16()
+      } else {
         // number of cuts <= v
         let mut a = lo
         let mut b = hi
@@ -120,7 +123,7 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
             b = mid
           }
         }
-        bins[r * cols + f] = (a - lo + 1).to_uint16()
+        bins[r * cols + f] = (a + 2 * f + 1).to_uint16()
         by_col[f * rows + r] = (a - lo + 1).to_uint16()
       }
     }
@@ -191,13 +194,45 @@ priv struct Grower {
   data : Binned
   p : TrainParams
   // gradient and hessian of row r at 2r and 2r + 1
-  gh : FixedArray[Double]
+  gh : FixedArray[Float]
+  // the same pair quantised to integers and packed as (g << 32) + h, so a
+  // histogram slot is one integer add; gs and hs are the scales
+  gq : FixedArray[Int64]
+  mut gs : Double
+  mut hs : Double
+  mut igs : Double // 1 / gs
+  mut ihs : Double // 1 / hs
   rows : FixedArray[Int32]
   scratch : FixedArray[Int32]
   // leaf value reached by each row, filled as leaves are finalised
   leaf_of_row : FixedArray[Double]
   nbins : Int32 // total histogram slots: per feature, missing + (cuts + 1)
   hist_start : FixedArray[Int32]
+}
+
+///|
+fn Grower::set_scales(
+  self : Grower,
+  n : Int32,
+  gmax : Double,
+  hmax : Double,
+) -> Unit {
+  // sums over all n rows stay inside 31 bits for g and 32 bits for h
+  let lg = (2147483647 / n - 1).to_double()
+  let lh = (2147483647 / n - 1).to_double() * 2.0
+  self.gs = if gmax > 0.0 { lg / gmax } else { 1.0 }
+  self.hs = if hmax > 0.0 { lh / hmax } else { 1.0 }
+  self.igs = 1.0 / self.gs
+  self.ihs = 1.0 / self.hs
+}
+
+///|
+/// Quantises a gradient pair, rounding half away from zero (h is never
+/// negative), and packs it as (g << 32) + h.
+fn Grower::pack(self : Grower, g : Double, h : Double) -> Int64 {
+  let x = g * self.gs
+  let gi = (x + (if x < 0.0 { -0.5 } else { 0.5 })).to_int64()
+  (gi << 32) + (h * self.hs + 0.5).to_int64()
 }
 
 ///|
@@ -216,33 +251,50 @@ fn Grower::histogram(
   self : Grower,
   lo : Int32,
   hi : Int32,
-) -> FixedArray[Double] {
-  let hist = FixedArray::make(self.nbins * 2, 0.0)
+) -> FixedArray[Int64] {
+  let hist = FixedArray::make(self.nbins, 0L)
   let cols = self.data.cols
   let bins = self.data.bins
   let rows = self.rows
-  let gh = self.gh
-  let hs = self.hist_start
-  // indices are in range by construction: rows hold row numbers, bins are
-  // at most the feature's bin count, and slot 0 of a feature is "missing"
+  let gq = self.gq
+  // indices are in range by construction: rows hold row numbers and bins
+  // hold histogram slots
   for i in lo..<hi {
     let r = rows.unsafe_get(i)
-    let g = gh.unsafe_get(r * 2)
-    let h = gh.unsafe_get(r * 2 + 1)
+    let q = gq.unsafe_get(r)
     let base = r * cols
-    for f in 0..<cols {
-      let slot = (hs.unsafe_get(f) + bins.unsafe_get(base + f).to_int()) * 2
-      hist.unsafe_set(slot, hist.unsafe_get(slot) + g)
-      hist.unsafe_set(slot + 1, hist.unsafe_get(slot + 1) + h)
+    let mut f = 0
+    while f + 4 <= cols {
+      let s0 = bins.unsafe_get(base + f).to_int()
+      let s1 = bins.unsafe_get(base + f + 1).to_int()
+      let s2 = bins.unsafe_get(base + f + 2).to_int()
+      let s3 = bins.unsafe_get(base + f + 3).to_int()
+      hist.unsafe_set(s0, hist.unsafe_get(s0) + q)
+      hist.unsafe_set(s1, hist.unsafe_get(s1) + q)
+      hist.unsafe_set(s2, hist.unsafe_get(s2) + q)
+      hist.unsafe_set(s3, hist.unsafe_get(s3) + q)
+      f += 4
+    }
+    while f < cols {
+      let slot = bins.unsafe_get(base + f).to_int()
+      hist.unsafe_set(slot, hist.unsafe_get(slot) + q)
+      f += 1
     }
   }
   hist
 }
 
 ///|
+/// Splits a packed histogram sum into its gradient and hessian.
+fn Grower::unpack(self : Grower, q : Int64) -> (Double, Double) {
+  let h = q & 0xFFFFFFFFL
+  (((q - h) >> 32).to_double() * self.igs, h.to_double() * self.ihs)
+}
+
+///|
 fn Grower::best_split(
   self : Grower,
-  hist : FixedArray[Double],
+  hist : FixedArray[Int64],
   g : Double,
   h : Double,
 ) -> Split? {
@@ -257,13 +309,16 @@ fn Grower::best_split(
     if n < 2 {
       continue
     }
-    let mg = hist[(start - 1) * 2]
-    let mh = hist[(start - 1) * 2 + 1]
-    let mut gl = 0.0
-    let mut hl = 0.0
+    let (mg, mh) = self.unpack(hist[start - 1])
+    let mut ql = 0L
     for b in 0..<(n - 1) {
-      gl += hist[(start + b) * 2]
-      hl += hist[(start + b) * 2 + 1]
+      let q = hist[start + b]
+      // an empty bin repeats the previous split, which cannot gain more
+      if q == 0L {
+        continue
+      }
+      ql = ql + q
+      let (gl, hl) = self.unpack(ql)
       // missing values to the right
       let gr = g - gl
       let hr = h - hl
@@ -338,7 +393,7 @@ fn Grower::grow(
   node : Int32,
   lo : Int32,
   hi : Int32,
-  hist : FixedArray[Double],
+  hist : FixedArray[Int64],
   g : Double,
   h : Double,
   depth : Int32,
@@ -350,7 +405,15 @@ fn Grower::grow(
   }
   match split {
     None => {
-      let leaf = Float::from_double(self.weight(g, h) * self.p.eta)
+      // leaf values use the exact gradient sums
+      let mut eg = 0.0
+      let mut eh = 0.0
+      for i in lo..<hi {
+        let r = self.rows[i]
+        eg += self.gh[r * 2].to_double()
+        eh += self.gh[r * 2 + 1].to_double()
+      }
+      let leaf = Float::from_double(self.weight(eg, eh) * self.p.eta)
       tree.split_cond[node] = leaf
       for i in lo..<hi {
         self.leaf_of_row[self.rows[i]] = leaf.to_double()
@@ -551,6 +614,10 @@ pub fn train_xgboost_json(
     "binary:logistic" => 1
     _ => 2
   }
+  // histogram slots are stored as UInt16
+  if data.cols * (p.max_bin + 1) > 65535 {
+    raise InvalidModel("too many features times bins for training")
+  }
   let binned = bin_matrix(data, p.max_bin)
   let hist_start = FixedArray::make(data.cols + 1, 0)
   for f in 0..<data.cols {
@@ -560,7 +627,12 @@ pub fn train_xgboost_json(
   let gr : Grower = {
     data: binned,
     p,
-    gh: FixedArray::make(n * 2, 0.0),
+    gh: FixedArray::make(n * 2, (0.0 : Float)),
+    gq: FixedArray::make(n, 0L),
+    gs: 1.0,
+    hs: 1.0,
+    igs: 1.0,
+    ihs: 1.0,
     rows: FixedArray::make(n, 0),
     scratch: FixedArray::make(n, 0),
     leaf_of_row: FixedArray::make(n, 0.0),
@@ -600,6 +672,27 @@ pub fn train_xgboost_json(
     for k in 0..<groups {
       let mut gsum = 0.0
       let mut hsum = 0.0
+      // bounds on |g| and h: known for the logistic losses, measured for
+      // squared error
+      match kind {
+        0 => {
+          let mut gmax = 0.0
+          for r in 0..<n {
+            let d = (margin[r * groups + k].to_double() - label[r].to_double()).abs()
+            if d > gmax {
+              gmax = d
+            }
+          }
+          gr.set_scales(
+            n,
+            Float::from_double(gmax).to_double() * 1.0000001,
+            1.0,
+          )
+        }
+        1 => gr.set_scales(n, 1.0, 0.25)
+        _ => gr.set_scales(n, 1.0, 0.5)
+      }
+      let mut qsum = 0L
       for r in 0..<n {
         let y = label[r].to_double()
         let m = margin[r * groups + k].to_double()
@@ -617,15 +710,21 @@ pub fn train_xgboost_json(
             (pr - t, if h < 1.0e-16 { 1.0e-16 } else { h })
           }
         }
-        gr.gh[r * 2] = g
-        gr.gh[r * 2 + 1] = h
+        let g = Float::from_double(g).to_double()
+        let h = Float::from_double(h).to_double()
+        gr.gh[r * 2] = Float::from_double(g)
+        gr.gh[r * 2 + 1] = Float::from_double(h)
+        let q = gr.pack(g, h)
+        gr.gq[r] = q
+        qsum = qsum + q
         gr.rows[r] = r
         gsum += g
         hsum += h
       }
+      let (qg, qh) = gr.unpack(qsum)
       let tree = GrowTree::new()
       let root = tree.add(-1, gr.weight(gsum, hsum), hsum)
-      gr.grow(tree, root, 0, n, gr.histogram(0, n), gsum, hsum, 0)
+      gr.grow(tree, root, 0, n, gr.histogram(0, n), qg, qh, 0)
       for r in 0..<n {
         margin[r * groups + k] = margin[r * groups + k] +
           Float::from_double(gr.leaf_of_row[r])

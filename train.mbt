@@ -201,6 +201,16 @@ priv struct Grower {
   mut gs : Double
   mut hs : Double
   mut igs : Double // 1 / gs
+  // deeper subtrees work on their own contiguous copy of their rows' bins
+  // and gradients (indexed by position, with the original row in `orig`),
+  // so deep, scattered nodes stay cache local.
+  // level 0 is the original arrays; a subtree is copied to the next level
+  // when its depth reaches compact_at[level]
+  compact_at : FixedArray[Int32]
+  cbins : FixedArray[FixedArray[UInt16]]
+  cq : FixedArray[FixedArray[Int64]]
+  cgh : FixedArray[FixedArray[Float]]
+  orig : FixedArray[FixedArray[Int32]]
   mut ihs : Double // 1 / hs
   rows : FixedArray[Int32]
   scratch : FixedArray[Int32]
@@ -251,12 +261,13 @@ fn Grower::histogram(
   self : Grower,
   lo : Int32,
   hi : Int32,
+  level : Int32,
 ) -> FixedArray[Int64] {
   let hist = FixedArray::make(self.nbins, 0L)
   let cols = self.data.cols
-  let bins = self.data.bins
+  let bins = if level > 0 { self.cbins[level - 1] } else { self.data.bins }
   let rows = self.rows
-  let gq = self.gq
+  let gq = if level > 0 { self.cq[level - 1] } else { self.gq }
   // indices are in range by construction: rows hold row numbers and bins
   // hold histogram slots
   for i in lo..<hi {
@@ -282,6 +293,38 @@ fn Grower::histogram(
     }
   }
   hist
+}
+
+///|
+/// Copies the bins and gradients of rows[lo:hi] to positions lo..hi of the
+/// next level's arrays, and makes rows[lo:hi] hold those positions.
+fn Grower::compact(
+  self : Grower,
+  lo : Int32,
+  hi : Int32,
+  level : Int32,
+) -> Unit {
+  let cols = self.data.cols
+  let (bins, q, gh) = if level > 0 {
+    (self.cbins[level - 1], self.cq[level - 1], self.cgh[level - 1])
+  } else {
+    (self.data.bins, self.gq, self.gh)
+  }
+  let tb = self.cbins[level]
+  let tq = self.cq[level]
+  let tg = self.cgh[level]
+  let to = self.orig[level]
+  for i in lo..<hi {
+    let r = self.rows[i]
+    for f in 0..<cols {
+      tb[i * cols + f] = bins[r * cols + f]
+    }
+    tq[i] = q[r]
+    tg[i * 2] = gh[r * 2]
+    tg[i * 2 + 1] = gh[r * 2 + 1]
+    to[i] = if level > 0 { self.orig[level - 1][r] } else { r }
+    self.rows[i] = i
+  }
 }
 
 ///|
@@ -358,21 +401,36 @@ fn Grower::best_split(
 ///|
 /// Moves rows[lo:hi] going left to the front; returns where the right part
 /// starts.
-fn Grower::partition(self : Grower, lo : Int32, hi : Int32, s : Split) -> Int32 {
+fn Grower::partition(
+  self : Grower,
+  lo : Int32,
+  hi : Int32,
+  s : Split,
+  level : Int32,
+) -> Int32 {
   let limit = s.bin + 1
-  let column = s.feature * self.gh.length() / 2
+  // the feature's bin of row r is bins[r * stride + column] - sub
+  let (bins, stride, column, sub) = if level > 0 {
+    (
+      self.cbins[level - 1],
+      self.data.cols,
+      s.feature,
+      self.hist_start[s.feature],
+    )
+  } else {
+    (self.data.by_col, 1, s.feature * self.gh.length() / 2, 0)
+  }
   // a missing value (bin 0) goes left as bin 0, or right as a bin past limit
   let miss = if s.default_left { 0 } else { 1 << 20 }
   let rows = self.rows
   let scratch = self.scratch
-  let bins = self.data.by_col
   let mut a = lo
   let mut b = 0
   // without branches: each row is written to both sides and only one
   // cursor advances; indices stay in range because a + b counts rows seen
   for i in lo..<hi {
     let r = rows.unsafe_get(i)
-    let bin = bins.unsafe_get(column + r).to_int()
+    let bin = bins.unsafe_get(r * stride + column).to_int() - sub
     let key = bin + (((bin - 1) >> 31) & miss)
     let left = if key <= limit { 1 } else { 0 }
     rows.unsafe_set(a, r)
@@ -397,7 +455,15 @@ fn Grower::grow(
   g : Double,
   h : Double,
   depth : Int32,
+  level : Int32,
 ) -> Unit {
+  let level = if level < self.compact_at.length() &&
+    depth >= self.compact_at[level] {
+    self.compact(lo, hi, level)
+    level + 1
+  } else {
+    level
+  }
   let split = if depth < self.p.max_depth && hi - lo >= 2 {
     self.best_split(hist, g, h)
   } else {
@@ -408,19 +474,23 @@ fn Grower::grow(
       // leaf values use the exact gradient sums
       let mut eg = 0.0
       let mut eh = 0.0
+      let gh = if level > 0 { self.cgh[level - 1] } else { self.gh }
       for i in lo..<hi {
         let r = self.rows[i]
-        eg += self.gh[r * 2].to_double()
-        eh += self.gh[r * 2 + 1].to_double()
+        eg += gh[r * 2].to_double()
+        eh += gh[r * 2 + 1].to_double()
       }
       let leaf = Float::from_double(self.weight(eg, eh) * self.p.eta)
       tree.split_cond[node] = leaf
       for i in lo..<hi {
-        self.leaf_of_row[self.rows[i]] = leaf.to_double()
+        // compact positions map to rows through orig; otherwise rows[i]
+        // is the row itself and orig is rows
+        let r = self.rows[i]
+        self.leaf_of_row[if level > 0 { self.orig[level - 1][r] } else { r }] = leaf.to_double()
       }
     }
     Some(s) => {
-      let mid = self.partition(lo, hi, s)
+      let mid = self.partition(lo, hi, s, level)
       let gl = s.gl
       let hl = s.hl
       let gr = g - gl
@@ -444,7 +514,7 @@ fn Grower::grow(
         } else {
           (mid, hi)
         }
-        let small = self.histogram(small_lo, small_hi)
+        let small = self.histogram(small_lo, small_hi, level)
         // the parent's histogram becomes the larger child's
         for i in 0..<hist.length() {
           hist[i] = hist[i] - small[i]
@@ -455,8 +525,8 @@ fn Grower::grow(
           (hist, small)
         }
       }
-      self.grow(tree, l, lo, mid, hl_hist, gl, hl, depth + 1)
-      self.grow(tree, r, mid, hi, hr_hist, gr, hr, depth + 1)
+      self.grow(tree, l, lo, mid, hl_hist, gl, hl, depth + 1, level)
+      self.grow(tree, r, mid, hi, hr_hist, gr, hr, depth + 1, level)
     }
   }
 }
@@ -632,6 +702,11 @@ pub fn train_xgboost_json(
     gs: 1.0,
     hs: 1.0,
     igs: 1.0,
+    compact_at: [2],
+    cbins: FixedArray::makei(1, fn(_) { FixedArray::make(n * data.cols, 0) }),
+    cq: FixedArray::makei(1, fn(_) { FixedArray::make(n, 0L) }),
+    cgh: FixedArray::makei(1, fn(_) { FixedArray::make(n * 2, (0.0 : Float)) }),
+    orig: FixedArray::makei(1, fn(_) { FixedArray::make(n, 0) }),
     ihs: 1.0,
     rows: FixedArray::make(n, 0),
     scratch: FixedArray::make(n, 0),
@@ -724,7 +799,7 @@ pub fn train_xgboost_json(
       let (qg, qh) = gr.unpack(qsum)
       let tree = GrowTree::new()
       let root = tree.add(-1, gr.weight(gsum, hsum), hsum)
-      gr.grow(tree, root, 0, n, gr.histogram(0, n), qg, qh, 0)
+      gr.grow(tree, root, 0, n, gr.histogram(0, n, 0), qg, qh, 0, 0)
       for r in 0..<n {
         margin[r * groups + k] = margin[r * groups + k] +
           Float::from_double(gr.leaf_of_row[r])

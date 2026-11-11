@@ -59,3 +59,8 @@ fn Src::ints(self : Src, what : String) -> Array[Int32] raise ModelError {
 fn Src::floats(self : Src, what : String) -> Array[Float] raise ModelError {
   self.items(what).map(v => Float::from_double(v.number(what)))
 }
+
+///|
+fn Src::from_json(j : Json) -> Src {
+  Src(j)
+}

@@ -31,7 +31,28 @@ suberror CliError {
 
 ///|
 fn load_model(path : String) -> @moonboost.Model raise {
-  @moonboost.Model::from_xgboost_json(@fs.read_file_to_string(path))
+  xgb_model(path, read_text(path))
+}
+
+///|
+/// The model file as text; empty for a binary UBJSON model (`.ubj`).
+fn read_text(path : String) -> String raise {
+  if path.has_suffix(".ubj") {
+    ""
+  } else {
+    @fs.read_file_to_string(path)
+  }
+}
+
+///|
+/// An XGBoost model from its JSON text, or from the file itself when it is
+/// UBJSON.
+fn xgb_model(path : String, text : String) -> @moonboost.Model raise {
+  if path.has_suffix(".ubj") {
+    @moonboost.Model::from_xgboost_ubjson(@fs.read_file_to_bytes(path))
+  } else {
+    @moonboost.Model::from_xgboost_json(text)
+  }
 }
 
 ///|
@@ -54,12 +75,12 @@ fn lgb_info(m : @moonboost.LightGBMModel) -> Unit {
 
 ///|
 fn info(path : String) -> Unit raise {
-  let text = @fs.read_file_to_string(path)
+  let text = read_text(path)
   if is_lightgbm(text) {
     lgb_info(@moonboost.LightGBMModel::from_text(text))
     return
   }
-  let m = @moonboost.Model::from_xgboost_json(text)
+  let m = xgb_model(path, text)
   println("objective:   \{m.objective.name()}")
   if m.linear.length() > 0 {
     println("booster:     gblinear")
@@ -87,7 +108,7 @@ fn predict(args : ArrayView[String]) -> Unit raise {
     raise CliError("predict needs <model.json> <data.csv>")
   }
   let header = args.contains("--header")
-  let text = @fs.read_file_to_string(files[0])
+  let text = read_text(files[0])
   let data = @moonboost.DenseMatrix::from_csv(
     @fs.read_file_to_string(files[1]),
     header~,
@@ -96,7 +117,7 @@ fn predict(args : ArrayView[String]) -> Unit raise {
     lgb_predict(@moonboost.LightGBMModel::from_text(text), data, args)
     return
   }
-  let model = @moonboost.Model::from_xgboost_json(text)
+  let model = xgb_model(files[0], text)
   if data.cols != model.num_feature {
     raise CliError(
       "data has \{data.cols} columns but model expects \{model.num_feature}",
@@ -162,7 +183,7 @@ fn bench(args : ArrayView[String]) -> Unit raise {
     raise CliError("bench needs <model.json> <data.csv>")
   }
   let tl = @env.now()
-  let text0 = @fs.read_file_to_string(files[0])
+  let text0 = read_text(files[0])
   if is_lightgbm(text0) {
     let m = @moonboost.LightGBMModel::from_text(text0)
     println("load:       \{(@env.now() - tl).to_double()} ms")

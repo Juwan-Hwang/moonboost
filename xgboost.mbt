@@ -83,7 +83,11 @@ fn parse_tree(t : Src, weight : Float) -> Tree raise ModelError {
 /// object) and the `gblinear` booster. Categorical features are passed as
 /// their integer codes.
 pub fn Model::from_xgboost_json(text : StringView) -> Model raise ModelError {
-  let root = Src::parse(text)
+  model_from_src(Src::parse(text))
+}
+
+///|
+fn model_from_src(root : Src) -> Model raise ModelError {
   let learner = root.field("learner")
   let lmp = learner.field("learner_model_param")
   let num_feature = param_int(lmp, "num_feature")

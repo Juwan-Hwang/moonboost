@@ -12,6 +12,8 @@ pub fn load_lightgbm(String) -> @moonboost.LightGBMModel?
 
 pub fn load_model(String) -> @moonboost.Model?
 
+pub fn load_model_ubjson(Bytes) -> @moonboost.Model?
+
 pub fn num_features(@moonboost.Model) -> Int32
 
 pub fn output_width(@moonboost.Model) -> Int32

@@ -33,6 +33,27 @@ pub fn load_model(json : String) -> @moonboost.Model? {
 }
 
 ///|
+/// Parse an XGBoost UBJSON model (`.ubj`) from a `Uint8Array`. Returns
+/// `undefined` if it cannot be loaded; `last_error()` then says why.
+#export_name("load_model_ubjson")
+pub fn load_model_ubjson(data : Bytes) -> @moonboost.Model? {
+  try {
+    let m = @moonboost.Model::from_xgboost_ubjson(data)
+    error.val = ""
+    Some(m)
+  } catch {
+    @moonboost.InvalidModel(msg) => {
+      error.val = "invalid model: " + msg
+      None
+    }
+    @moonboost.Unsupported(msg) => {
+      error.val = "unsupported: " + msg
+      None
+    }
+  }
+}
+
+///|
 let error : Ref[String] = Ref("")
 
 ///|

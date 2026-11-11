@@ -100,3 +100,10 @@ fn Src::floats(self : Src, what : String) -> Array[Float] raise ModelError {
   }
   Array::from_fixed_array(js_float_array(r))
 }
+
+///|
+/// A UBJSON model reaches the JS loader as text, so it goes through the
+/// engine's own parser like a JSON file.
+fn Src::from_json(j : Json) -> Src raise ModelError {
+  Src::parse(j.stringify())
+}

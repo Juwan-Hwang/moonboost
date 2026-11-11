@@ -41,8 +41,11 @@ trust because it is tested against XGBoost itself.
 | Blocked batch prediction | done |
 | ES module for browsers and Node (`web/`) | done |
 | Browser demo (`docs/`, GitHub Pages) | done |
-| XGBoost UBJSON models | planned |
+| XGBoost UBJSON models (`.ubj`) | done |
 | Training | planned |
+
+Later: multithreaded training and batch prediction, once MoonBit ships
+official support for parallelism. Everything here runs on one thread today.
 
 ## Correctness
 
@@ -409,7 +412,8 @@ predict_batch(model, new Float32Array(rowMajorValues), 4); // 4 columns
 ```
 
 LightGBM models use `load_lightgbm(text)`, `predict_lightgbm(model, row)`
-and `predict_lightgbm_raw(model, row)`.
+and `predict_lightgbm_raw(model, row)`. An XGBoost `.ubj` file loads with
+`load_model_ubjson(bytes)`, where `bytes` is a `Uint8Array`.
 
 See `examples/node/iris.mjs`.
 
@@ -428,7 +432,7 @@ moon run cmd/main --target js -- predict examples/iris/model.json examples/iris/
 
 `--margin` prints raw scores and `--leaf` prints the leaf reached in each tree.
 LightGBM text models work the same way; the CLI tells the formats apart by
-content.
+content. XGBoost UBJSON models are read when the file name ends in `.ubj`.
 
 ## Development
 

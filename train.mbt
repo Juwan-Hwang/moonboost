@@ -44,12 +44,14 @@ pub fn TrainParams::default() -> TrainParams {
 }
 
 ///|
-/// Feature values cut into bins. `bins[r * cols + f]` is the bin of row `r`
-/// in feature `f` (`-1` when missing); a value `v` falls in bin `k` when
+/// Feature values cut into bins. `bins[r * cols + f]` is one more than the
+/// bin of row `r` in feature `f` (`0` when missing); a value `v` falls in bin `k` when
 /// exactly `k` of the feature's cut points are `<= v`.
 priv struct Binned {
   cols : Int32
-  bins : FixedArray[Int32]
+  bins : FixedArray[UInt16]
+  // the same, column by column: by_col[f * rows + r]
+  by_col : FixedArray[UInt16]
   // cut points of feature f are cuts[cut_start[f] .. cut_start[f + 1]]
   cuts : Array[Float]
   cut_start : FixedArray[Int32]
@@ -61,7 +63,8 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
   let cols = m.cols
   let cuts : Array[Float] = []
   let cut_start = FixedArray::make(cols + 1, 0)
-  let bins = FixedArray::make(rows * cols, -1)
+  let bins : FixedArray[UInt16] = FixedArray::make(rows * cols, 0)
+  let by_col : FixedArray[UInt16] = FixedArray::make(rows * cols, 0)
   let vals : Array[Float] = []
   for f in 0..<cols {
     vals.clear()
@@ -117,11 +120,12 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
             b = mid
           }
         }
-        bins[r * cols + f] = a - lo
+        bins[r * cols + f] = (a - lo + 1).to_uint16()
+        by_col[f * rows + r] = (a - lo + 1).to_uint16()
       }
     }
   }
-  { cols, bins, cuts, cut_start, }
+  { cols, bins, by_col, cuts, cut_start, }
 }
 
 ///|
@@ -186,13 +190,13 @@ priv struct Split {
 priv struct Grower {
   data : Binned
   p : TrainParams
-  grad : FixedArray[Double]
-  hess : FixedArray[Double]
+  // gradient and hessian of row r at 2r and 2r + 1
+  gh : FixedArray[Double]
   rows : FixedArray[Int32]
   scratch : FixedArray[Int32]
   // leaf value reached by each row, filled as leaves are finalised
   leaf_of_row : FixedArray[Double]
-  nbins : Int32 // total histogram slots: sum over features of (cuts + 1)
+  nbins : Int32 // total histogram slots: per feature, missing + (cuts + 1)
   hist_start : FixedArray[Int32]
 }
 
@@ -216,18 +220,20 @@ fn Grower::histogram(
   let hist = FixedArray::make(self.nbins * 2, 0.0)
   let cols = self.data.cols
   let bins = self.data.bins
+  let rows = self.rows
+  let gh = self.gh
+  let hs = self.hist_start
+  // indices are in range by construction: rows hold row numbers, bins are
+  // at most the feature's bin count, and slot 0 of a feature is "missing"
   for i in lo..<hi {
-    let r = self.rows[i]
-    let g = self.grad[r]
-    let h = self.hess[r]
+    let r = rows.unsafe_get(i)
+    let g = gh.unsafe_get(r * 2)
+    let h = gh.unsafe_get(r * 2 + 1)
     let base = r * cols
     for f in 0..<cols {
-      let b = bins[base + f]
-      if b >= 0 {
-        let s = (self.hist_start[f] + b) * 2
-        hist[s] = hist[s] + g
-        hist[s + 1] = hist[s + 1] + h
-      }
+      let slot = (hs.unsafe_get(f) + bins.unsafe_get(base + f).to_int()) * 2
+      hist.unsafe_set(slot, hist.unsafe_get(slot) + g)
+      hist.unsafe_set(slot + 1, hist.unsafe_get(slot + 1) + h)
     }
   }
   hist
@@ -245,19 +251,14 @@ fn Grower::best_split(
   let mut best : Split? = None
   let mut best_gain = self.p.gamma
   for f in 0..<self.data.cols {
-    let start = self.hist_start[f]
+    // slot hist_start[f] holds the feature's missing values, then its bins
+    let start = self.hist_start[f] + 1
     let n = self.data.cut_start[f + 1] - self.data.cut_start[f] + 1
     if n < 2 {
       continue
     }
-    let mut fg = 0.0
-    let mut fh = 0.0
-    for b in 0..<n {
-      fg += hist[(start + b) * 2]
-      fh += hist[(start + b) * 2 + 1]
-    }
-    let mg = g - fg
-    let mh = h - fh
+    let mg = hist[(start - 1) * 2]
+    let mh = hist[(start - 1) * 2 + 1]
     let mut gl = 0.0
     let mut hl = 0.0
     for b in 0..<(n - 1) {
@@ -303,23 +304,29 @@ fn Grower::best_split(
 /// Moves rows[lo:hi] going left to the front; returns where the right part
 /// starts.
 fn Grower::partition(self : Grower, lo : Int32, hi : Int32, s : Split) -> Int32 {
-  let cols = self.data.cols
+  let limit = s.bin + 1
+  let column = s.feature * self.gh.length() / 2
+  // a missing value (bin 0) goes left as bin 0, or right as a bin past limit
+  let miss = if s.default_left { 0 } else { 1 << 20 }
+  let rows = self.rows
+  let scratch = self.scratch
+  let bins = self.data.by_col
   let mut a = lo
   let mut b = 0
+  // without branches: each row is written to both sides and only one
+  // cursor advances; indices stay in range because a + b counts rows seen
   for i in lo..<hi {
-    let r = self.rows[i]
-    let bin = self.data.bins[r * cols + s.feature]
-    let go_left = if bin < 0 { s.default_left } else { bin <= s.bin }
-    if go_left {
-      self.rows[a] = r
-      a += 1
-    } else {
-      self.scratch[b] = r
-      b += 1
-    }
+    let r = rows.unsafe_get(i)
+    let bin = bins.unsafe_get(column + r).to_int()
+    let key = bin + (((bin - 1) >> 31) & miss)
+    let left = if key <= limit { 1 } else { 0 }
+    rows.unsafe_set(a, r)
+    scratch.unsafe_set(b, r)
+    a += left
+    b += 1 - left
   }
   for i in 0..<b {
-    self.rows[a + i] = self.scratch[i]
+    rows.unsafe_set(a + i, scratch.unsafe_get(i))
   }
   a
 }
@@ -364,21 +371,26 @@ fn Grower::grow(
         s.bin]
       tree.default_left[node] = s.default_left
       tree.loss_change[node] = Float::from_double(s.gain)
-      // build the smaller child's histogram, derive the other's
-      let (small_lo, small_hi) = if mid - lo <= hi - mid {
-        (lo, mid)
+      // children at the depth limit become leaves and need no histogram;
+      // otherwise build the smaller child's and derive the other's
+      let (hl_hist, hr_hist) = if depth + 1 >= self.p.max_depth {
+        (hist, hist)
       } else {
-        (mid, hi)
-      }
-      let small = self.histogram(small_lo, small_hi)
-      let big = FixedArray::make(hist.length(), 0.0)
-      for i in 0..<hist.length() {
-        big[i] = hist[i] - small[i]
-      }
-      let (hl_hist, hr_hist) = if small_lo == lo {
-        (small, big)
-      } else {
-        (big, small)
+        let (small_lo, small_hi) = if mid - lo <= hi - mid {
+          (lo, mid)
+        } else {
+          (mid, hi)
+        }
+        let small = self.histogram(small_lo, small_hi)
+        // the parent's histogram becomes the larger child's
+        for i in 0..<hist.length() {
+          hist[i] = hist[i] - small[i]
+        }
+        if small_lo == lo {
+          (small, hist)
+        } else {
+          (hist, small)
+        }
       }
       self.grow(tree, l, lo, mid, hl_hist, gl, hl, depth + 1)
       self.grow(tree, r, mid, hi, hr_hist, gr, hr, depth + 1)
@@ -479,7 +491,7 @@ pub fn train_xgboost_json(
   if n == 0 {
     raise InvalidModel("no training rows")
   }
-  if p.max_bin < 2 || p.max_depth < 1 || p.num_round < 0 {
+  if p.max_bin < 2 || p.max_bin > 65535 || p.max_depth < 1 || p.num_round < 0 {
     raise InvalidModel("bad training parameters")
   }
   let groups = match p.objective {
@@ -534,17 +546,21 @@ pub fn train_xgboost_json(
     }
     _ => ("[" + Array::make(groups, "0").join(",") + "]", 0.0)
   }
+  let kind = match p.objective {
+    "reg:squarederror" => 0
+    "binary:logistic" => 1
+    _ => 2
+  }
   let binned = bin_matrix(data, p.max_bin)
   let hist_start = FixedArray::make(data.cols + 1, 0)
   for f in 0..<data.cols {
     hist_start[f + 1] = hist_start[f] +
-      (binned.cut_start[f + 1] - binned.cut_start[f] + 1)
+      (binned.cut_start[f + 1] - binned.cut_start[f] + 2)
   }
   let gr : Grower = {
     data: binned,
     p,
-    grad: FixedArray::make(n, 0.0),
-    hess: FixedArray::make(n, 0.0),
+    gh: FixedArray::make(n * 2, 0.0),
     rows: FixedArray::make(n, 0),
     scratch: FixedArray::make(n, 0),
     leaf_of_row: FixedArray::make(n, 0.0),
@@ -587,9 +603,9 @@ pub fn train_xgboost_json(
       for r in 0..<n {
         let y = label[r].to_double()
         let m = margin[r * groups + k].to_double()
-        let (g, h) = match p.objective {
-          "reg:squarederror" => (m - y, 1.0)
-          "binary:logistic" => {
+        let (g, h) = match kind {
+          0 => (m - y, 1.0)
+          1 => {
             let pr = 1.0 / (1.0 + @math.exp(-m))
             let h = pr * (1.0 - pr)
             (pr - y, if h < 1.0e-16 { 1.0e-16 } else { h })
@@ -601,8 +617,8 @@ pub fn train_xgboost_json(
             (pr - t, if h < 1.0e-16 { 1.0e-16 } else { h })
           }
         }
-        gr.grad[r] = g
-        gr.hess[r] = h
+        gr.gh[r * 2] = g
+        gr.gh[r * 2 + 1] = h
         gr.rows[r] = r
         gsum += g
         hsum += h

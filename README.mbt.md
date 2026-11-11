@@ -326,15 +326,16 @@ oneDAL's differences from the original libraries are at most 2.2e-7. Every
 moonboost prediction on this machine matched XGBoost and LightGBM bit for
 bit, as on ARM. lleaves took over nine minutes to compile the 500-tree model.
 
-Loading, in ms (read the file, parse, build the prediction form; oneDAL's
-figure is its conversion from an already loaded booster):
+Loading, in ms (read the file, parse, build the prediction form, first load
+in a fresh process; oneDAL's figure is its conversion from an already loaded
+booster):
 
 | Model file | moonboost native | XGBoost / LightGBM | oneDAL conversion |
 |---|---|---|---|
 | XGBoost, 500 trees (9.1 MB JSON) | 127 | 159 | 604 |
 | XGBoost, 1000 trees (19 MB JSON) | 269 | 370 | 1,927 |
-| LightGBM, 500 trees (text) | 55 | 38 | 2,048 |
-| LightGBM, 1000 trees (38 MB text) | 168 | 176 | 7,865 |
+| LightGBM, 500 trees (text) | 38 | 44 | 2,048 |
+| LightGBM, 1000 trees (38 MB text) | 121 | 149 | 7,865 |
 
 ## Usage
 

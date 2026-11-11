@@ -145,10 +145,12 @@ fn lgb_doubles(
     if start == i {
       break
     }
-    let t = s.unsafe_view(start~, end=i)
     out.push(
-      @string.parse_double(t) catch {
-        _ => raise InvalidModel("bad number in `\{key}`: \{t}")
+      lgb_parse_double(s, start, i) catch {
+        _ => {
+          let t = s.unsafe_view(start~, end=i)
+          raise InvalidModel("bad number in `\{key}`: \{t}")
+        }
       },
     )
   }

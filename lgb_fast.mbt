@@ -85,12 +85,40 @@ fn LgbFast::build(
   groups : Int32,
 ) -> LgbFast? {
   let per_feature : Array[Array[Double]] = Array::makei(num_feature, _ => [])
+  // thresholds repeat heavily (LightGBM cuts at bin edges), so drop repeats
+  // with an open-addressing set of (feature, bits) before sorting
+  let mut splits = 0
+  for t in trees {
+    splits += t.left.length()
+  }
+  let mut cap = 16
+  while cap < 2 * splits {
+    cap = cap * 2
+  }
+  let seen_bits : FixedArray[UInt64] = FixedArray::make(cap, 0)
+  let seen_feat : FixedArray[Int32] = FixedArray::make(cap, 0) // feature + 1
   for t in trees {
     for i in 0..<t.left.length() {
       if t.decision_type[i] % 2 == 1 {
         return None
       }
-      per_feature[t.split_feature[i]].push(t.threshold[i])
+      let f = t.split_feature[i]
+      let v = t.threshold[i]
+      let bits = v.reinterpret_as_uint64()
+      let h0 = (bits ^ f.to_uint64()) * 0x9E3779B97F4A7C15UL
+      let mut h = (h0 >> 32).to_int() & (cap - 1)
+      while true {
+        if seen_feat[h] == 0 {
+          seen_feat[h] = f + 1
+          seen_bits[h] = bits
+          per_feature[f].push(v)
+          break
+        }
+        if seen_feat[h] == f + 1 && seen_bits[h] == bits {
+          break
+        }
+        h = (h + 1) & (cap - 1)
+      }
     }
   }
   let cut_start = FixedArray::make(num_feature + 1, 0)
@@ -126,17 +154,22 @@ fn LgbFast::build(
   let leaf_value : Array[Double] = []
   let roots = FixedArray::make(trees.length(), 0)
   let depth = FixedArray::make(trees.length(), 0)
+  let qnode : Array[Int32] = []
+  let qdepth : Array[Int32] = []
   for ti, t in trees {
     let base = left.length()
     roots[ti] = base
-    // queue of (lightgbm node, depth); a node >= 0 is a split, ~i is leaf i
-    let queue : Array[(Int32, Int32)] = [
-      (if t.left.length() == 0 { -1 } else { 0 }, 0),
-    ]
+    // queue of lightgbm nodes and their depths; a node >= 0 is a split, ~i
+    // is leaf i
+    qnode.clear()
+    qdepth.clear()
+    qnode.push(if t.left.length() == 0 { -1 } else { 0 })
+    qdepth.push(0)
     let mut head = 0
     let mut maxd = 0
-    while head < queue.length() {
-      let (node, d) = queue[head]
+    while head < qnode.length() {
+      let node = qnode[head]
+      let d = qdepth[head]
       let id = base + head
       head += 1
       if d > maxd {
@@ -159,7 +192,7 @@ fn LgbFast::build(
         1 => if default_left { 3 } else { 4 }
         _ => 2
       }
-      left.push(base + queue.length())
+      left.push(base + qnode.length())
       let key = f * LGB_SLOTS + s
       let id = if slot_id[key] >= 0 {
         slot_id[key]
@@ -186,8 +219,10 @@ fn LgbFast::build(
         lgb_index(cuts, cut_start[f], cut_start[f + 1], t.threshold[node]),
       )
       leaf_value.push(0.0)
-      queue.push((t.left[node], d + 1))
-      queue.push((t.right[node], d + 1))
+      qnode.push(t.left[node])
+      qdepth.push(d + 1)
+      qnode.push(t.right[node])
+      qdepth.push(d + 1)
     }
     depth[ti] = maxd
   }
@@ -207,11 +242,19 @@ fn LgbFast::build(
     let hs = FixedArray::make(trees.length() * size, 0)
     let ht = FixedArray::make(trees.length() * size, inf)
     let hl = FixedArray::make(trees.length() * size, 0.0)
+    // heap position of every node; breadth-first ids put each parent
+    // before its children, so one forward pass fills them in
+    let hpos = FixedArray::make(left.length(), 0)
     for ti in 0..<trees.length() {
       let base = ti * size
-      // (node id in `left`/`slot`, heap position)
-      let stack = [(roots[ti], 1)]
-      while stack.pop() is Some((id, h)) {
+      let end = if ti + 1 < trees.length() {
+        roots[ti + 1]
+      } else {
+        left.length()
+      }
+      hpos[roots[ti]] = 1
+      for id in roots[ti]..<end {
+        let h = hpos[id]
         if rank[id] == LGB_LEAF {
           // a leaf: always left down to the last level
           let mut p = h
@@ -222,8 +265,8 @@ fn LgbFast::build(
         } else {
           hs[base + h] = slot[id]
           ht[base + h] = thr[id]
-          stack.push((left[id], 2 * h))
-          stack.push((left[id] + 1, 2 * h + 1))
+          hpos[left[id]] = 2 * h
+          hpos[left[id] + 1] = 2 * h + 1
         }
       }
     }

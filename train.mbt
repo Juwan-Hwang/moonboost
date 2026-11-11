@@ -246,6 +246,38 @@ fn Grower::pack(self : Grower, g : Double, h : Double) -> Int64 {
 }
 
 ///|
+/// exp to about 1e-9 relative error, ample for gradients that are rounded
+/// to float32: x = k ln2 + r with |r| <= ln2 / 2, a degree-7 polynomial for
+/// e^r, and 2^k built from its exponent bits. x is clamped to +-80, where
+/// the losses are saturated.
+fn train_exp(x : Double) -> Double {
+  let x = if x > 80.0 { 80.0 } else if x < -80.0 { -80.0 } else { x }
+  let t = x * 1.4426950408889634
+  let ki = (t + (if t < 0.0 { -0.5 } else { 0.5 })).to_int64()
+  let kf = ki.to_double()
+  let r = x - kf * 0.6931471803691238 - kf * 1.9082149292705877e-10
+  let p = 1.0 +
+    r *
+    (
+      1.0 +
+      r *
+      (
+        0.5 +
+        r *
+        (
+          1.0 / 6.0 +
+          r *
+          (
+            1.0 / 24.0 +
+            r * (1.0 / 120.0 + r * (1.0 / 720.0 + r * (1.0 / 5040.0)))
+          )
+        )
+      )
+    )
+  p * ((ki + 1023L) << 52).reinterpret_as_double()
+}
+
+///|
 fn Grower::weight(self : Grower, g : Double, h : Double) -> Double {
   -g / (h + self.p.lambda)
 }
@@ -458,7 +490,8 @@ fn Grower::grow(
   level : Int32,
 ) -> Unit {
   let level = if level < self.compact_at.length() &&
-    depth >= self.compact_at[level] {
+    depth >= self.compact_at[level] &&
+    depth < self.p.max_depth {
     self.compact(lo, hi, level)
     level + 1
   } else {
@@ -733,7 +766,7 @@ pub fn train_xgboost_json(
         }
         let mut sum = 0.0
         for k in 0..<groups {
-          prob[k] = @math.exp(margin[r * groups + k].to_double() - mx)
+          prob[k] = train_exp(margin[r * groups + k].to_double() - mx)
           sum += prob[k]
         }
         for k in 0..<groups {
@@ -774,7 +807,7 @@ pub fn train_xgboost_json(
         let (g, h) = match kind {
           0 => (m - y, 1.0)
           1 => {
-            let pr = 1.0 / (1.0 + @math.exp(-m))
+            let pr = 1.0 / (1.0 + train_exp(-m))
             let h = pr * (1.0 - pr)
             (pr - y, if h < 1.0e-16 { 1.0e-16 } else { h })
           }

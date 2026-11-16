@@ -308,7 +308,10 @@ fn Grower::set_scales(
 /// negative), and packs it as (g << 32) + h.
 fn Grower::pack(self : Grower, g : Double, h : Double) -> Int64 {
   let x = g * self.gs
-  let gi = (x + (if x < 0.0 { -0.5 } else { 0.5 })).to_int64()
+  // 0.5 with the sign of x, from its bits: the sign of a gradient is
+  // unpredictable, so a branch on it would often be mispredicted
+  let half = ((x.reinterpret_as_int64() & (1L << 63)) | 0x3FE0000000000000L).reinterpret_as_double()
+  let gi = (x + half).to_int64()
   (gi << 32) + (h * self.hs + 0.5).to_int64()
 }
 

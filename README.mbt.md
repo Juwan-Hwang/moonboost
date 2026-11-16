@@ -69,8 +69,8 @@ the parent minus it), and each split learns where missing values go.
 Gradient pairs are quantised per tree to integers packed into one 64-bit
 word, so a histogram slot is one integer add and the subtraction is exact
 (leaf values still use the exact gradient sums). Below depth 2 each subtree
-copies its rows' bins and gradients into a contiguous buffer, so deep,
-scattered nodes stay in cache. The
+copies its rows' bins (one byte each when they fit) and gradients into a
+contiguous buffer, so deep, scattered nodes stay in cache. The
 result is an ordinary XGBoost JSON model: XGBoost loads it and predicts the
 same float32 bits as moonboost. Training is single-threaded.
 
@@ -91,12 +91,13 @@ label-encoded, which differs from GBM-perf's own setup), two runs each:
 
 | Library | Training time | Test AUC |
 |---|---|---|
-| moonboost native | 8.7 s, 9.1 s | 0.7537 |
-| XGBoost 3.4.1 `hist` | 9.1 s, 9.1 s | 0.7533 |
-| LightGBM 4.7.0 (`num_leaves=1024`, `max_depth=10`) | 6.8 s, 6.7 s | 0.7545 |
+| moonboost native | 9.0 s, 9.3 s | 0.7537 |
+| XGBoost 3.4.1 `hist` | 10.8 s, 10.8 s | 0.7533 |
+| LightGBM 4.7.0 (`num_leaves=1024`, `max_depth=10`) | 8.0 s, 7.9 s | 0.7545 |
 
-moonboost is level with XGBoost here, and LightGBM is still about 30%
-faster (`bench/gbmperf_compare.py`).
+moonboost is about 15% faster than XGBoost here, and LightGBM is still about
+15% faster than moonboost (`bench/gbmperf_compare.py`; all three in the same
+session).
 
 The same training runs in the browser through the ES module's `train`
 (the 3-class case takes 1.6 s in Node).

@@ -618,6 +618,86 @@ fn Grower::swap_rows(self : Grower) -> Unit {
 }
 
 ///|
+/// Partitions rows[lo:hi] (original rows) like `partition`, but writes each
+/// row's bins and gradients to the copy level at its new position, left
+/// rows upwards from lo and right rows downwards from hi - 1; the
+/// children's rows in scratch are then those positions.
+fn Grower::partition_copy(
+  self : Grower,
+  lo : Int32,
+  hi : Int32,
+  s : Split,
+) -> Int32 {
+  let limit = s.bin + 1
+  let miss = if s.default_left { 0 } else { 1 << 20 }
+  let cols = self.data.cols
+  let n = self.leaf_at.length()
+  let rows = self.rows
+  let dst = self.scratch
+  let q = self.gq
+  let gh = self.gh
+  let tq = self.cq[0]
+  let tg = self.cgh[0]
+  let to = self.orig[0]
+  let mut a = lo
+  let mut b = hi - 1
+  // indices are in range: rows[lo:hi] are rows, and a + (hi - 1 - b)
+  // counts rows seen
+  if self.narrow {
+    let by8 = self.by8
+    let b8 = self.bins8
+    let tb = self.cbins[0]
+    let column = s.feature * n
+    let add = self.cbase[s.feature] - self.hist_start[s.feature]
+    for i in lo..<hi {
+      let r = rows.unsafe_get(i)
+      let bin = by8.unsafe_get(r + column).to_int() + add
+      let key = bin + (((bin - 1) >> 31) & miss)
+      let left = if key <= limit { 1 } else { 0 }
+      let p = b + (a - b) * left
+      let src = r * cols
+      let at = p * cols
+      for f in 0..<cols {
+        tb.unsafe_set(at + f, b8.unsafe_get(src + f))
+      }
+      tq.unsafe_set(p, q.unsafe_get(r))
+      tg.unsafe_set(p * 2, gh.unsafe_get(r * 2))
+      tg.unsafe_set(p * 2 + 1, gh.unsafe_get(r * 2 + 1))
+      to.unsafe_set(p, r)
+      a += left
+      b -= 1 - left
+    }
+  } else {
+    let by_col = self.data.by_col
+    let bins = self.data.bins
+    let tw = self.cbins16[0]
+    let column = s.feature * n
+    for i in lo..<hi {
+      let r = rows.unsafe_get(i)
+      let bin = by_col.unsafe_get(r + column).to_int()
+      let key = bin + (((bin - 1) >> 31) & miss)
+      let left = if key <= limit { 1 } else { 0 }
+      let p = b + (a - b) * left
+      let src = r * cols
+      let at = p * cols
+      for f in 0..<cols {
+        tw.unsafe_set(at + f, bins.unsafe_get(src + f))
+      }
+      tq.unsafe_set(p, q.unsafe_get(r))
+      tg.unsafe_set(p * 2, gh.unsafe_get(r * 2))
+      tg.unsafe_set(p * 2 + 1, gh.unsafe_get(r * 2 + 1))
+      to.unsafe_set(p, r)
+      a += left
+      b -= 1 - left
+    }
+  }
+  for i in lo..<hi {
+    dst.unsafe_set(i, i)
+  }
+  a
+}
+
+///|
 fn Grower::grow(
   self : Grower,
   tree : GrowTree,
@@ -672,7 +752,18 @@ fn Grower::grow(
       }
     }
     Some(s) => {
-      let mid = self.partition(lo, hi, s, level)
+      // a node just above the copy depth partitions its rows straight
+      // into the copy, reading each row once in row order
+      let copy = level == 0 &&
+        self.compact_at.length() > 0 &&
+        depth + 1 == self.compact_at[0] &&
+        depth + 1 < self.p.max_depth
+      let mid = if copy {
+        self.partition_copy(lo, hi, s)
+      } else {
+        self.partition(lo, hi, s, level)
+      }
+      let level = if copy { 1 } else { level }
       // the children's rows are in scratch; they become the current rows
       // until both children have grown
       self.swap_rows()

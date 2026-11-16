@@ -161,23 +161,23 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
     cut_start[f + 1] = cuts.length()
     let lo = base
     let hi = cuts.length()
+    let fc = FixedArray::makei(hi - lo, fn(i) { cuts[lo + i] })
     for r in 0..<rows {
       let v = m.data[r * cols + f]
       if v.is_nan() {
         missing[f] = true
         bins[r * cols + f] = (lo + 2 * f).to_uint16()
       } else {
-        // number of cuts <= v
-        let mut a = lo
-        let mut b = hi
-        while a < b {
-          let mid = (a + b) / 2
-          if cuts[mid] <= v {
-            a = mid + 1
-          } else {
-            b = mid
-          }
+        // number of cuts <= v, by steps that add a 0/1 multiple rather
+        // than branch
+        let mut k = 0
+        let mut len = hi - lo
+        while len > 0 {
+          let half = len / 2
+          k += (fc.unsafe_get(k + half) <= v).to_int() * (len - half)
+          len = half
         }
+        let a = lo + k
         bins[r * cols + f] = (a + 2 * f + 1).to_uint16()
         by_col[f * rows + r] = (a - lo + 1).to_uint16()
       }

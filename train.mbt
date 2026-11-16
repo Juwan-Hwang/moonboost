@@ -274,8 +274,9 @@ priv struct Grower {
   mut ihs : Double // 1 / hs
   rows : FixedArray[Int32]
   scratch : FixedArray[Int32]
-  // leaf value reached by each row, filled as leaves are finalised
-  leaf_of_row : FixedArray[Double]
+  // leaf node reached by each copied position (orig[0] maps positions to
+  // rows); a leaf above the copy depth fills its own positions and orig[0]
+  leaf_at : FixedArray[Int32]
   nbins : Int32 // total histogram slots: per feature, missing + (cuts + 1)
   hist_start : FixedArray[Int32]
 }
@@ -427,40 +428,52 @@ fn Grower::compact(
   hi : Int32,
   level : Int32,
 ) -> Unit {
+  // subtrees are copied from the original arrays only (compact_at has one
+  // depth), so the source is always level 0
+  guard level == 0 else { abort("subtrees are copied once") }
   let cols = self.data.cols
-  let (q, gh) = if level > 0 {
-    (self.cq[level - 1], self.cgh[level - 1])
-  } else {
-    (self.gq, self.gh)
-  }
-  let bins = if level > 0 { self.cbins16[level - 1] } else { self.data.bins }
-  let narrow = self.narrow
-  let tb = self.cbins[level]
-  let tw = self.cbins16[level]
-  let tq = self.cq[level]
-  let tg = self.cgh[level]
-  let to = self.orig[level]
-  for i in lo..<hi {
-    let r = self.rows[i]
-    if !narrow {
+  let rows = self.rows
+  let q = self.gq
+  let gh = self.gh
+  let bins = self.data.bins
+  let tq = self.cq[0]
+  let tg = self.cgh[0]
+  let to = self.orig[0]
+  // indices are in range: rows[lo:hi] are rows, i < n
+  if self.narrow {
+    let tb = self.cbins[0]
+    let cbase = self.cbase
+    for i in lo..<hi {
+      let r = rows.unsafe_get(i)
+      let src = r * cols
+      let dst = i * cols
       for f in 0..<cols {
-        tw[i * cols + f] = bins[r * cols + f]
+        tb.unsafe_set(
+          dst + f,
+          (bins.unsafe_get(src + f).to_int() - cbase.unsafe_get(f)).to_byte(),
+        )
       }
-    } else if level > 0 {
-      let cb = self.cbins[level - 1]
-      for f in 0..<cols {
-        tb[i * cols + f] = cb[r * cols + f]
-      }
-    } else {
-      for f in 0..<cols {
-        tb[i * cols + f] = (bins[r * cols + f].to_int() - self.cbase[f]).to_byte()
-      }
+      tq.unsafe_set(i, q.unsafe_get(r))
+      tg.unsafe_set(i * 2, gh.unsafe_get(r * 2))
+      tg.unsafe_set(i * 2 + 1, gh.unsafe_get(r * 2 + 1))
+      to.unsafe_set(i, r)
+      rows.unsafe_set(i, i)
     }
-    tq[i] = q[r]
-    tg[i * 2] = gh[r * 2]
-    tg[i * 2 + 1] = gh[r * 2 + 1]
-    to[i] = if level > 0 { self.orig[level - 1][r] } else { r }
-    self.rows[i] = i
+  } else {
+    let tw = self.cbins16[0]
+    for i in lo..<hi {
+      let r = rows.unsafe_get(i)
+      let src = r * cols
+      let dst = i * cols
+      for f in 0..<cols {
+        tw.unsafe_set(dst + f, bins.unsafe_get(src + f))
+      }
+      tq.unsafe_set(i, q.unsafe_get(r))
+      tg.unsafe_set(i * 2, gh.unsafe_get(r * 2))
+      tg.unsafe_set(i * 2 + 1, gh.unsafe_get(r * 2 + 1))
+      to.unsafe_set(i, r)
+      rows.unsafe_set(i, i)
+    }
   }
 }
 
@@ -638,11 +651,19 @@ fn Grower::grow(
       }
       let leaf = Float::from_double(self.weight(eg, eh) * self.p.eta)
       tree.split_cond[node] = leaf
-      for i in lo..<hi {
-        // compact positions map to rows through orig; otherwise rows[i]
-        // is the row itself and orig is rows
-        let r = self.rows[i]
-        self.leaf_of_row[if level > 0 { self.orig[level - 1][r] } else { r }] = leaf.to_double()
+      // positions in rows[lo:hi] are those of one copy level (there is at
+      // most one); a leaf above it is given the positions lo..hi, which no
+      // copied subtree uses
+      if level > 0 {
+        for i in lo..<hi {
+          self.leaf_at[self.rows[i]] = node
+        }
+      } else {
+        let o = self.orig[0]
+        for i in lo..<hi {
+          o[i] = self.rows[i]
+          self.leaf_at[i] = node
+        }
       }
     }
     Some(s) => {
@@ -894,7 +915,7 @@ fn train_json(
     ihs: 1.0,
     rows: FixedArray::make(n, 0),
     scratch: FixedArray::make(n, 0),
-    leaf_of_row: FixedArray::make(n, 0.0),
+    leaf_at: FixedArray::make(n, 0),
     nbins: hist_start[data.cols],
     hist_start,
   }
@@ -984,9 +1005,10 @@ fn train_json(
       let tree = GrowTree::new()
       let root = tree.add(-1, gr.weight(gsum, hsum), hsum)
       gr.grow(tree, root, 0, n, gr.histogram(0, n, 0), qg, qh, 0, 0)
-      for r in 0..<n {
-        margin[r * groups + k] = margin[r * groups + k] +
-          Float::from_double(gr.leaf_of_row[r])
+      let o = gr.orig[0]
+      for i in 0..<n {
+        let at = o[i] * groups + k
+        margin[at] = margin[at] + tree.split_cond[gr.leaf_at[i]]
       }
       if num_trees > 0 {
         trees.write_char(',')

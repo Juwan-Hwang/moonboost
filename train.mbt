@@ -272,8 +272,10 @@ priv struct Grower {
   cgh : FixedArray[FixedArray[Float]]
   orig : FixedArray[FixedArray[Int32]]
   mut ihs : Double // 1 / hs
-  rows : FixedArray[Int32]
-  scratch : FixedArray[Int32]
+  // rows of the nodes at the current depth; partitioning writes the
+  // children's rows to `scratch`, and the two swap while the children grow
+  mut rows : FixedArray[Int32]
+  mut scratch : FixedArray[Int32]
   // leaf node reached by each copied position (orig[0] maps positions to
   // rows); a leaf above the copy depth fills its own positions and orig[0]
   leaf_at : FixedArray[Int32]
@@ -562,11 +564,12 @@ fn Grower::partition(
   // a missing value (bin 0) goes left as bin 0, or right as a bin past limit
   let miss = if s.default_left { 0 } else { 1 << 20 }
   let rows = self.rows
-  let scratch = self.scratch
+  let dst = self.scratch
   let mut a = lo
-  let mut b = 0
-  // without branches: each row is written to both sides and only one
-  // cursor advances; indices stay in range because a + b counts rows seen
+  let mut b = hi - 1
+  // without branches: left rows fill dst upwards from lo and right rows
+  // downwards from hi - 1; each row is written at both cursors and only
+  // one advances, so every slot ends with the row last meant for it
   if level > 0 && self.narrow {
     // the feature's bin of position r is cb[r * cols + feature] + add
     let cb = self.cbins[level - 1]
@@ -578,10 +581,10 @@ fn Grower::partition(
       let bin = cb.unsafe_get(r * cols + column).to_int() + add
       let key = bin + (((bin - 1) >> 31) & miss)
       let left = if key <= limit { 1 } else { 0 }
-      rows.unsafe_set(a, r)
-      scratch.unsafe_set(b, r)
+      dst.unsafe_set(a, r)
+      dst.unsafe_set(b, r)
       a += left
-      b += 1 - left
+      b -= 1 - left
     }
   } else {
     // the feature's bin of row r is bins[r * stride + column] - sub
@@ -600,16 +603,20 @@ fn Grower::partition(
       let bin = bins.unsafe_get(r * stride + column).to_int() - sub
       let key = bin + (((bin - 1) >> 31) & miss)
       let left = if key <= limit { 1 } else { 0 }
-      rows.unsafe_set(a, r)
-      scratch.unsafe_set(b, r)
+      dst.unsafe_set(a, r)
+      dst.unsafe_set(b, r)
       a += left
-      b += 1 - left
+      b -= 1 - left
     }
   }
-  for i in 0..<b {
-    rows.unsafe_set(a + i, scratch.unsafe_get(i))
-  }
   a
+}
+
+///|
+fn Grower::swap_rows(self : Grower) -> Unit {
+  let t = self.rows
+  self.rows = self.scratch
+  self.scratch = t
 }
 
 ///|
@@ -668,6 +675,9 @@ fn Grower::grow(
     }
     Some(s) => {
       let mid = self.partition(lo, hi, s, level)
+      // the children's rows are in scratch; they become the current rows
+      // until both children have grown
+      self.swap_rows()
       let gl = s.gl
       let hl = s.hl
       let gr = g - gl
@@ -704,6 +714,7 @@ fn Grower::grow(
       }
       self.grow(tree, l, lo, mid, hl_hist, gl, hl, depth + 1, level)
       self.grow(tree, r, mid, hi, hr_hist, gr, hr, depth + 1, level)
+      self.swap_rows()
     }
   }
 }

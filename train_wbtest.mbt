@@ -31,3 +31,36 @@ test "sorted_column matches a comparison sort" {
     assert_true(got[i] == want[i])
   }
 }
+
+///|
+test "one-byte and two-byte copied bins train the same model" {
+  // a few thousand rows, some features with missing values, deep enough
+  // for subtrees to be copied
+  let rows = 3000
+  let cols = 3
+  let data = Array::make(rows * cols, (0.0 : Float))
+  let label = Array::make(rows, (0.0 : Float))
+  let mut seed = 12345
+  for r in 0..<rows {
+    for f in 0..<cols {
+      seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
+      let v = (seed % 1000).to_double() / 10.0
+      data[r * cols + f] = if f == 2 && seed % 7 == 0 {
+        Float::from_double(0.0 / 0.0)
+      } else {
+        Float::from_double(v)
+      }
+    }
+    let x = data[r * cols].to_double() + data[r * cols + 1].to_double()
+    label[r] = if x > 100.0 { 1.0 } else { 0.0 }
+  }
+  let m = DenseMatrix::new(data, cols~)
+  let p = {
+    ..TrainParams::default(),
+    objective: "binary:logistic",
+    max_depth: 6,
+    num_round: 3,
+    max_bin: 64,
+  }
+  assert_eq(train_json(m, label, p, true), train_json(m, label, p, false))
+}

@@ -56,6 +56,8 @@ priv struct Binned {
   // cut points of feature f are cuts[cut_start[f] .. cut_start[f + 1]]
   cuts : Array[Float]
   cut_start : FixedArray[Int32]
+  // whether feature f has a missing value
+  missing : FixedArray[Bool]
 }
 
 ///|
@@ -125,6 +127,7 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
   let cut_start = FixedArray::make(cols + 1, 0)
   let bins : FixedArray[UInt16] = FixedArray::make(rows * cols, 0)
   let by_col : FixedArray[UInt16] = FixedArray::make(rows * cols, 0)
+  let missing = FixedArray::make(cols, false)
   for f in 0..<cols {
     let vals = sorted_column(m, f)
     let base = cuts.length()
@@ -161,6 +164,7 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
     for r in 0..<rows {
       let v = m.data[r * cols + f]
       if v.is_nan() {
+        missing[f] = true
         bins[r * cols + f] = (lo + 2 * f).to_uint16()
       } else {
         // number of cuts <= v
@@ -179,7 +183,7 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
       }
     }
   }
-  { cols, bins, by_col, cuts, cut_start, }
+  { cols, bins, by_col, cuts, cut_start, missing, }
 }
 
 ///|
@@ -258,7 +262,12 @@ priv struct Grower {
   // level 0 is the original arrays; a subtree is copied to the next level
   // when its depth reaches compact_at[level]
   compact_at : FixedArray[Int32]
-  cbins : FixedArray[FixedArray[UInt16]]
+  // copied bins take one byte, slot - cbase[feature], when every feature's
+  // slots in use span at most 256 (narrow); otherwise two, the slot itself
+  narrow : Bool
+  cbins : FixedArray[FixedArray[Byte]]
+  cbase : FixedArray[Int32]
+  cbins16 : FixedArray[FixedArray[UInt16]]
   cq : FixedArray[FixedArray[Int64]]
   cgh : FixedArray[FixedArray[Float]]
   orig : FixedArray[FixedArray[Int32]]
@@ -348,8 +357,39 @@ fn Grower::histogram(
 ) -> FixedArray[Int64] {
   let hist = FixedArray::make(self.nbins, 0L)
   let cols = self.data.cols
-  let bins = if level > 0 { self.cbins[level - 1] } else { self.data.bins }
   let rows = self.rows
+  if level > 0 && self.narrow {
+    let cb = self.cbins[level - 1]
+    let cq = self.cq[level - 1]
+    let base_of = self.cbase
+    for i in lo..<hi {
+      let r = rows.unsafe_get(i)
+      let q = cq.unsafe_get(r)
+      let base = r * cols
+      let mut f = 0
+      while f + 4 <= cols {
+        let s0 = cb.unsafe_get(base + f).to_int() + base_of.unsafe_get(f)
+        let s1 = cb.unsafe_get(base + f + 1).to_int() +
+          base_of.unsafe_get(f + 1)
+        let s2 = cb.unsafe_get(base + f + 2).to_int() +
+          base_of.unsafe_get(f + 2)
+        let s3 = cb.unsafe_get(base + f + 3).to_int() +
+          base_of.unsafe_get(f + 3)
+        hist.unsafe_set(s0, hist.unsafe_get(s0) + q)
+        hist.unsafe_set(s1, hist.unsafe_get(s1) + q)
+        hist.unsafe_set(s2, hist.unsafe_get(s2) + q)
+        hist.unsafe_set(s3, hist.unsafe_get(s3) + q)
+        f += 4
+      }
+      while f < cols {
+        let slot = cb.unsafe_get(base + f).to_int() + base_of.unsafe_get(f)
+        hist.unsafe_set(slot, hist.unsafe_get(slot) + q)
+        f += 1
+      }
+    }
+    return hist
+  }
+  let bins = if level > 0 { self.cbins16[level - 1] } else { self.data.bins }
   let gq = if level > 0 { self.cq[level - 1] } else { self.gq }
   // indices are in range by construction: rows hold row numbers and bins
   // hold histogram slots
@@ -388,19 +428,33 @@ fn Grower::compact(
   level : Int32,
 ) -> Unit {
   let cols = self.data.cols
-  let (bins, q, gh) = if level > 0 {
-    (self.cbins[level - 1], self.cq[level - 1], self.cgh[level - 1])
+  let (q, gh) = if level > 0 {
+    (self.cq[level - 1], self.cgh[level - 1])
   } else {
-    (self.data.bins, self.gq, self.gh)
+    (self.gq, self.gh)
   }
+  let bins = if level > 0 { self.cbins16[level - 1] } else { self.data.bins }
+  let narrow = self.narrow
   let tb = self.cbins[level]
+  let tw = self.cbins16[level]
   let tq = self.cq[level]
   let tg = self.cgh[level]
   let to = self.orig[level]
   for i in lo..<hi {
     let r = self.rows[i]
-    for f in 0..<cols {
-      tb[i * cols + f] = bins[r * cols + f]
+    if !narrow {
+      for f in 0..<cols {
+        tw[i * cols + f] = bins[r * cols + f]
+      }
+    } else if level > 0 {
+      let cb = self.cbins[level - 1]
+      for f in 0..<cols {
+        tb[i * cols + f] = cb[r * cols + f]
+      }
+    } else {
+      for f in 0..<cols {
+        tb[i * cols + f] = (bins[r * cols + f].to_int() - self.cbase[f]).to_byte()
+      }
     }
     tq[i] = q[r]
     tg[i * 2] = gh[r * 2]
@@ -492,17 +546,6 @@ fn Grower::partition(
   level : Int32,
 ) -> Int32 {
   let limit = s.bin + 1
-  // the feature's bin of row r is bins[r * stride + column] - sub
-  let (bins, stride, column, sub) = if level > 0 {
-    (
-      self.cbins[level - 1],
-      self.data.cols,
-      s.feature,
-      self.hist_start[s.feature],
-    )
-  } else {
-    (self.data.by_col, 1, s.feature * self.gh.length() / 2, 0)
-  }
   // a missing value (bin 0) goes left as bin 0, or right as a bin past limit
   let miss = if s.default_left { 0 } else { 1 << 20 }
   let rows = self.rows
@@ -511,15 +554,44 @@ fn Grower::partition(
   let mut b = 0
   // without branches: each row is written to both sides and only one
   // cursor advances; indices stay in range because a + b counts rows seen
-  for i in lo..<hi {
-    let r = rows.unsafe_get(i)
-    let bin = bins.unsafe_get(r * stride + column).to_int() - sub
-    let key = bin + (((bin - 1) >> 31) & miss)
-    let left = if key <= limit { 1 } else { 0 }
-    rows.unsafe_set(a, r)
-    scratch.unsafe_set(b, r)
-    a += left
-    b += 1 - left
+  if level > 0 && self.narrow {
+    // the feature's bin of position r is cb[r * cols + feature] + add
+    let cb = self.cbins[level - 1]
+    let cols = self.data.cols
+    let column = s.feature
+    let add = self.cbase[s.feature] - self.hist_start[s.feature]
+    for i in lo..<hi {
+      let r = rows.unsafe_get(i)
+      let bin = cb.unsafe_get(r * cols + column).to_int() + add
+      let key = bin + (((bin - 1) >> 31) & miss)
+      let left = if key <= limit { 1 } else { 0 }
+      rows.unsafe_set(a, r)
+      scratch.unsafe_set(b, r)
+      a += left
+      b += 1 - left
+    }
+  } else {
+    // the feature's bin of row r is bins[r * stride + column] - sub
+    let (bins, stride, column, sub) = if level > 0 {
+      (
+        self.cbins16[level - 1],
+        self.data.cols,
+        s.feature,
+        self.hist_start[s.feature],
+      )
+    } else {
+      (self.data.by_col, 1, s.feature * self.gh.length() / 2, 0)
+    }
+    for i in lo..<hi {
+      let r = rows.unsafe_get(i)
+      let bin = bins.unsafe_get(r * stride + column).to_int() - sub
+      let key = bin + (((bin - 1) >> 31) & miss)
+      let left = if key <= limit { 1 } else { 0 }
+      rows.unsafe_set(a, r)
+      scratch.unsafe_set(b, r)
+      a += left
+      b += 1 - left
+    }
   }
   for i in 0..<b {
     rows.unsafe_set(a + i, scratch.unsafe_get(i))
@@ -700,6 +772,17 @@ pub fn train_xgboost_json(
   label : ArrayView[Float],
   params~ : TrainParams = TrainParams::default(),
 ) -> String raise ModelError {
+  train_json(data, label, params, true)
+}
+
+///|
+/// `allow_narrow` false forces two-byte copied bins (for tests).
+fn train_json(
+  data : DenseMatrix,
+  label : ArrayView[Float],
+  params : TrainParams,
+  allow_narrow : Bool,
+) -> String raise ModelError {
   let p = params
   let n = data.rows
   if label.length() != n {
@@ -778,6 +861,18 @@ pub fn train_xgboost_json(
     hist_start[f + 1] = hist_start[f] +
       (binned.cut_start[f + 1] - binned.cut_start[f] + 2)
   }
+  // per-feature base of the one-byte copied bins: a feature without
+  // missing values never uses its missing slot
+  let cbase = FixedArray::makei(data.cols, fn(f) {
+    hist_start[f] + (if binned.missing[f] { 0 } else { 1 })
+  })
+  let mut narrow = allow_narrow
+  for f in 0..<data.cols {
+    if hist_start[f + 1] - 1 - cbase[f] > 255 {
+      narrow = false
+    }
+  }
+  let copies = if narrow { 0 } else { n * data.cols }
   let gr : Grower = {
     data: binned,
     p,
@@ -787,7 +882,12 @@ pub fn train_xgboost_json(
     hs: 1.0,
     igs: 1.0,
     compact_at: [2],
-    cbins: FixedArray::makei(1, fn(_) { FixedArray::make(n * data.cols, 0) }),
+    narrow,
+    cbins: FixedArray::makei(1, fn(_) {
+      FixedArray::make(n * data.cols - copies, (0 : Byte))
+    }),
+    cbase,
+    cbins16: FixedArray::makei(1, fn(_) { FixedArray::make(copies, 0) }),
     cq: FixedArray::makei(1, fn(_) { FixedArray::make(n, 0L) }),
     cgh: FixedArray::makei(1, fn(_) { FixedArray::make(n * 2, (0.0 : Float)) }),
     orig: FixedArray::makei(1, fn(_) { FixedArray::make(n, 0) }),

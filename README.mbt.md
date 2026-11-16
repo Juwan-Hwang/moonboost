@@ -91,13 +91,12 @@ label-encoded, which differs from GBM-perf's own setup), two runs each:
 
 | Library | Training time | Test AUC |
 |---|---|---|
-| moonboost native | 9.0 s, 9.3 s | 0.7537 |
-| XGBoost 3.4.1 `hist` | 10.8 s, 10.8 s | 0.7533 |
-| LightGBM 4.7.0 (`num_leaves=1024`, `max_depth=10`) | 8.0 s, 7.9 s | 0.7545 |
+| moonboost native | 7.8 s, 8.1 s | 0.7537 |
+| XGBoost 3.4.1 `hist` | 10.5 s, 10.9 s | 0.7533 |
+| LightGBM 4.7.0 (`num_leaves=1024`, `max_depth=10`) | 7.8 s, 8.2 s | 0.7545 |
 
-moonboost is about 15% faster than XGBoost here, and LightGBM is still about
-15% faster than moonboost (`bench/gbmperf_compare.py`; all three in the same
-session).
+moonboost is about 25% faster than XGBoost here and level with LightGBM
+(`bench/gbmperf_compare.py`; all three in the same session).
 
 The same training runs in the browser through the ES module's `train`
 (the 3-class case takes 1.6 s in Node).

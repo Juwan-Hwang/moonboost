@@ -319,28 +319,20 @@ fn Grower::pack(self : Grower, g : Double, h : Double) -> Int64 {
 /// the losses are saturated.
 fn train_exp(x : Double) -> Double {
   let x = if x > 80.0 { 80.0 } else if x < -80.0 { -80.0 } else { x }
-  let t = x * 1.4426950408889634
-  let ki = (t + (if t < 0.0 { -0.5 } else { 0.5 })).to_int64()
-  let kf = ki.to_double()
+  // k = round(x / ln2) by the 1.5 * 2^52 trick, without a branch or a
+  // checked conversion
+  let kd = x * 1.4426950408889634 + 6755399441055744.0
+  let ki = kd.reinterpret_as_int64() - 0x4338000000000000L
+  let kf = kd - 6755399441055744.0
   let r = x - kf * 0.6931471803691238 - kf * 1.9082149292705877e-10
+  // Estrin's scheme: a shorter dependency chain than Horner's
+  let r2 = r * r
+  let r4 = r2 * r2
   let p = 1.0 +
-    r *
-    (
-      1.0 +
-      r *
-      (
-        0.5 +
-        r *
-        (
-          1.0 / 6.0 +
-          r *
-          (
-            1.0 / 24.0 +
-            r * (1.0 / 120.0 + r * (1.0 / 720.0 + r * (1.0 / 5040.0)))
-          )
-        )
-      )
-    )
+    r +
+    r2 * (0.5 + r * (1.0 / 6.0)) +
+    r4 *
+    (1.0 / 24.0 + r * (1.0 / 120.0) + r2 * (1.0 / 720.0 + r * (1.0 / 5040.0)))
   p * ((ki + 1023L) << 52).reinterpret_as_double()
 }
 

@@ -59,6 +59,65 @@ priv struct Binned {
 }
 
 ///|
+/// Sorts the non-missing values of one column: a radix sort on keys that
+/// order like the floats, skipping the byte passes where all keys agree.
+fn sorted_column(m : DenseMatrix, f : Int32) -> FixedArray[Float] {
+  let rows = m.rows
+  let cols = m.cols
+  let mut n = 0
+  for r in 0..<rows {
+    if !m.data[r * cols + f].is_nan() {
+      n += 1
+    }
+  }
+  let mut keys : FixedArray[Int32] = FixedArray::make(n, 0)
+  let mut tmp : FixedArray[Int32] = FixedArray::make(n, 0)
+  let mut k = 0
+  for r in 0..<rows {
+    let v = m.data[r * cols + f]
+    if !v.is_nan() {
+      let b = v.reinterpret_as_int()
+      // flip negatives so signed integer order matches float order, then
+      // move the sign so unsigned byte order does too
+      keys[k] = b ^ ((b >> 31) & 0x7FFFFFFF) ^ 0x80000000
+      k += 1
+    }
+  }
+  let count = FixedArray::make(256, 0)
+  for pass in 0..<4 {
+    let shift = pass * 8
+    count.fill(0)
+    for i in 0..<n {
+      let d = (keys.unsafe_get(i) >> shift) & 255
+      count.unsafe_set(d, count.unsafe_get(d) + 1)
+    }
+    if n == 0 || count[(keys[0] >> shift) & 255] == n {
+      continue
+    }
+    let mut sum = 0
+    for d in 0..<256 {
+      let c = count[d]
+      count[d] = sum
+      sum += c
+    }
+    for i in 0..<n {
+      let key = keys.unsafe_get(i)
+      let d = (key >> shift) & 255
+      let at = count.unsafe_get(d)
+      tmp.unsafe_set(at, key)
+      count.unsafe_set(d, at + 1)
+    }
+    let t = keys
+    keys = tmp
+    tmp = t
+  }
+  FixedArray::makei(n, fn(i) {
+    let key = keys[i] ^ 0x80000000
+    Float::reinterpret_from_int(key ^ ((key >> 31) & 0x7FFFFFFF))
+  })
+}
+
+///|
 fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
   let rows = m.rows
   let cols = m.cols
@@ -66,16 +125,8 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
   let cut_start = FixedArray::make(cols + 1, 0)
   let bins : FixedArray[UInt16] = FixedArray::make(rows * cols, 0)
   let by_col : FixedArray[UInt16] = FixedArray::make(rows * cols, 0)
-  let vals : Array[Float] = []
   for f in 0..<cols {
-    vals.clear()
-    for r in 0..<rows {
-      let v = m.data[r * cols + f]
-      if !v.is_nan() {
-        vals.push(v)
-      }
-    }
-    vals.sort()
+    let vals = sorted_column(m, f)
     let base = cuts.length()
     let n = vals.length()
     if n > 0 {

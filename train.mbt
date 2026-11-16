@@ -265,6 +265,10 @@ priv struct Grower {
   // copied bins take one byte, slot - cbase[feature], when every feature's
   // slots in use span at most 256 (narrow); otherwise two, the slot itself
   narrow : Bool
+  // when narrow, the original bins in the same one-byte form
+  bins8 : FixedArray[Byte]
+  // and column by column: by8[f * rows + r]
+  by8 : FixedArray[Byte]
   cbins : FixedArray[FixedArray[Byte]]
   cbase : FixedArray[Int32]
   cbins16 : FixedArray[FixedArray[UInt16]]
@@ -361,9 +365,12 @@ fn Grower::histogram(
   let hist = FixedArray::make(self.nbins, 0L)
   let cols = self.data.cols
   let rows = self.rows
-  if level > 0 && self.narrow {
-    let cb = self.cbins[level - 1]
-    let cq = self.cq[level - 1]
+  if self.narrow {
+    let (cb, cq) = if level > 0 {
+      (self.cbins[level - 1], self.cq[level - 1])
+    } else {
+      (self.bins8, self.gq)
+    }
     let base_of = self.cbase
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
@@ -444,16 +451,13 @@ fn Grower::compact(
   // indices are in range: rows[lo:hi] are rows, i < n
   if self.narrow {
     let tb = self.cbins[0]
-    let cbase = self.cbase
+    let b8 = self.bins8
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
       let src = r * cols
       let dst = i * cols
       for f in 0..<cols {
-        tb.unsafe_set(
-          dst + f,
-          (bins.unsafe_get(src + f).to_int() - cbase.unsafe_get(f)).to_byte(),
-        )
+        tb.unsafe_set(dst + f, b8.unsafe_get(src + f))
       }
       tq.unsafe_set(i, q.unsafe_get(r))
       tg.unsafe_set(i * 2, gh.unsafe_get(r * 2))
@@ -570,15 +574,17 @@ fn Grower::partition(
   // without branches: left rows fill dst upwards from lo and right rows
   // downwards from hi - 1; each row is written at both cursors and only
   // one advances, so every slot ends with the row last meant for it
-  if level > 0 && self.narrow {
-    // the feature's bin of position r is cb[r * cols + feature] + add
-    let cb = self.cbins[level - 1]
-    let cols = self.data.cols
-    let column = s.feature
+  if self.narrow {
+    // the feature's bin of position r is cb[r * stride + column] + add
+    let (cb, stride, column) = if level > 0 {
+      (self.cbins[level - 1], self.data.cols, s.feature)
+    } else {
+      (self.by8, 1, s.feature * self.leaf_at.length())
+    }
     let add = self.cbase[s.feature] - self.hist_start[s.feature]
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
-      let bin = cb.unsafe_get(r * cols + column).to_int() + add
+      let bin = cb.unsafe_get(r * stride + column).to_int() + add
       let key = bin + (((bin - 1) >> 31) & miss)
       let left = if key <= limit { 1 } else { 0 }
       dst.unsafe_set(a, r)
@@ -905,6 +911,9 @@ fn train_json(
     }
   }
   let copies = if narrow { 0 } else { n * data.cols }
+  let bins8 = FixedArray::makei(n * data.cols - copies, fn(i) {
+    (binned.bins[i].to_int() - cbase[i % data.cols]).to_byte()
+  })
   let gr : Grower = {
     data: binned,
     p,
@@ -915,6 +924,10 @@ fn train_json(
     igs: 1.0,
     compact_at: [2],
     narrow,
+    bins8,
+    by8: FixedArray::makei(n * data.cols - copies, fn(i) {
+      bins8[i % n * data.cols + i / n]
+    }),
     cbins: FixedArray::makei(1, fn(_) {
       FixedArray::make(n * data.cols - copies, (0 : Byte))
     }),

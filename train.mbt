@@ -44,14 +44,15 @@ pub fn TrainParams::default() -> TrainParams {
 }
 
 ///|
-/// Feature values cut into bins. `bins[r * cols + f]` is the histogram slot
-/// of row `r` in feature `f`: `cut_start[f] + 2 * f` when missing, then one
-/// per bin; `by_col[f * rows + r]` is one more than the bin (`0` missing); a value `v` falls in bin `k` when
-/// exactly `k` of the feature's cut points are `<= v`.
+/// Feature values cut into bins. `by_col[f * rows + r]` is one more than
+/// the bin of row `r` in feature `f` (`0` missing); a value `v` falls in bin
+/// `k` when exactly `k` of the feature's cut points are `<= v`.
 priv struct Binned {
   cols : Int32
-  bins : FixedArray[UInt16]
-  // the same, column by column: by_col[f * rows + r]
+  // for two-byte training, the histogram slot of row r in feature f at
+  // bins[r * cols + f]: `cut_start[f] + 2 * f` when missing, then one per
+  // bin (filled by training only when needed)
+  mut bins : FixedArray[UInt16]
   by_col : FixedArray[UInt16]
   // cut points of feature f are cuts[cut_start[f] .. cut_start[f + 1]]
   cuts : Array[Float]
@@ -125,7 +126,6 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
   let cols = m.cols
   let cuts : Array[Float] = []
   let cut_start = FixedArray::make(cols + 1, 0)
-  let bins : FixedArray[UInt16] = FixedArray::make(rows * cols, 0)
   let by_col : FixedArray[UInt16] = FixedArray::make(rows * cols, 0)
   let missing = FixedArray::make(cols, false)
   for f in 0..<cols {
@@ -166,7 +166,6 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
       let v = m.data[r * cols + f]
       if v.is_nan() {
         missing[f] = true
-        bins[r * cols + f] = (lo + 2 * f).to_uint16()
       } else {
         // number of cuts <= v, by steps that add a 0/1 multiple rather
         // than branch
@@ -177,13 +176,11 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
           k += (fc.unsafe_get(k + half) <= v).to_int() * (len - half)
           len = half
         }
-        let a = lo + k
-        bins[r * cols + f] = (a + 2 * f + 1).to_uint16()
-        by_col[f * rows + r] = (a - lo + 1).to_uint16()
+        by_col[f * rows + r] = (k + 1).to_uint16()
       }
     }
   }
-  { cols, bins, by_col, cuts, cut_start, missing, }
+  { cols, bins: FixedArray::make(0, 0), by_col, cuts, cut_start, missing, }
 }
 
 ///|
@@ -906,9 +903,30 @@ fn train_json(
     }
   }
   let copies = if narrow { 0 } else { n * data.cols }
-  let bins8 = FixedArray::makei(n * data.cols - copies, fn(i) {
-    (binned.bins[i].to_int() - cbase[i % data.cols]).to_byte()
-  })
+  let cols = data.cols
+  let bins8 = FixedArray::make(n * cols - copies, b'\x00')
+  let by8 = FixedArray::make(n * cols - copies, b'\x00')
+  let by_col = binned.by_col
+  if narrow {
+    // one-byte bins: the bin, plus one for a feature with missing values
+    // (whose missing bin is 0)
+    for f in 0..<cols {
+      let adj = if binned.missing[f] { 0 } else { 1 }
+      for r in 0..<n {
+        let b = (by_col.unsafe_get(f * n + r).to_int() - adj).to_byte()
+        bins8.unsafe_set(r * cols + f, b)
+        by8.unsafe_set(f * n + r, b)
+      }
+    }
+  } else {
+    let bins = FixedArray::make(n * cols, (0 : UInt16))
+    for f in 0..<cols {
+      for r in 0..<n {
+        bins[r * cols + f] = (by_col[f * n + r].to_int() + hist_start[f]).to_uint16()
+      }
+    }
+    binned.bins = bins
+  }
   let gr : Grower = {
     data: binned,
     p,
@@ -920,9 +938,7 @@ fn train_json(
     compact_at: [2],
     narrow,
     bins8,
-    by8: FixedArray::makei(n * data.cols - copies, fn(i) {
-      bins8[i % n * data.cols + i / n]
-    }),
+    by8,
     cbins: FixedArray::makei(1, fn(_) {
       FixedArray::make(n * data.cols - copies, (0 : Byte))
     }),

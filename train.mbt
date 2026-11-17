@@ -376,6 +376,40 @@ fn Grower::histogram(
     }
     let wb = self.wbase
     let words = self.words
+    if words == 1 {
+      // the slot bases in locals: hist stores could alias wbase for the C
+      // compiler, which would reload it for every byte
+      let b0 = wb[0]
+      let b1 = wb[1]
+      let b2 = wb[2]
+      let b3 = wb[3]
+      let b4 = wb[4]
+      let b5 = wb[5]
+      let b6 = wb[6]
+      let b7 = wb[7]
+      for i in lo..<hi {
+        let r = rows.unsafe_get(i)
+        let q = cq.unsafe_get(r)
+        let x = cb.unsafe_get(r)
+        let s0 = (x & 255UL).to_int() + b0
+        let s1 = ((x >> 8) & 255UL).to_int() + b1
+        let s2 = ((x >> 16) & 255UL).to_int() + b2
+        let s3 = ((x >> 24) & 255UL).to_int() + b3
+        let s4 = ((x >> 32) & 255UL).to_int() + b4
+        let s5 = ((x >> 40) & 255UL).to_int() + b5
+        let s6 = ((x >> 48) & 255UL).to_int() + b6
+        let s7 = (x >> 56).to_int() + b7
+        hist.unsafe_set(s0, hist.unsafe_get(s0) + q)
+        hist.unsafe_set(s1, hist.unsafe_get(s1) + q)
+        hist.unsafe_set(s2, hist.unsafe_get(s2) + q)
+        hist.unsafe_set(s3, hist.unsafe_get(s3) + q)
+        hist.unsafe_set(s4, hist.unsafe_get(s4) + q)
+        hist.unsafe_set(s5, hist.unsafe_get(s5) + q)
+        hist.unsafe_set(s6, hist.unsafe_get(s6) + q)
+        hist.unsafe_set(s7, hist.unsafe_get(s7) + q)
+      }
+      return hist
+    }
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
       let q = cq.unsafe_get(r)

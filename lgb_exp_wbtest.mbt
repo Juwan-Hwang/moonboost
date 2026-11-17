@@ -5,8 +5,8 @@ fn check_exp_vectors(vectors : String) -> Unit raise {
     if parts.length() != 2 {
       continue
     }
-    let x = @string.parse_uint64(parts[0], base=16).reinterpret_as_double()
-    let want = @string.parse_uint64(parts[1], base=16)
+    let x = @string.parse_uint64(parts[0], radix=16).reinterpret_as_double()
+    let want = @string.parse_uint64(parts[1], radix=16)
     let y = soft_exp(x)
     let z = lgb_exp(x)
     if !x.is_nan() {

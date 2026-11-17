@@ -230,6 +230,50 @@ fn Grower::histogram(
     }
     let wb = self.wbase
     let words = self.words
+    if words == 2 {
+      // up to eight features: the slot bases in locals and both words
+      // unrolled
+      let b0 = wb[0] * 2
+      let b1 = wb[1] * 2
+      let b2 = wb[2] * 2
+      let b3 = wb[3] * 2
+      let b4 = wb[4] * 2
+      let b5 = wb[5] * 2
+      let b6 = wb[6] * 2
+      let b7 = wb[7] * 2
+      for i in lo..<hi {
+        let r = rows.unsafe_get(i)
+        let g = qa.unsafe_get(r * 2)
+        let h = qa.unsafe_get(r * 2 + 1)
+        let x = cb.unsafe_get(r * 2)
+        let y = cb.unsafe_get(r * 2 + 1)
+        let s0 = (x & 255) * 2 + b0
+        let s1 = ((x >> 7) & 510) + b1
+        let s2 = ((x >> 15) & 510) + b2
+        let s3 = ((x >> 23) & 510) + b3
+        let s4 = (y & 255) * 2 + b4
+        let s5 = ((y >> 7) & 510) + b5
+        let s6 = ((y >> 15) & 510) + b6
+        let s7 = ((y >> 23) & 510) + b7
+        hist.unsafe_set(s0, hist.unsafe_get(s0) + g)
+        hist.unsafe_set(s0 + 1, hist.unsafe_get(s0 + 1) + h)
+        hist.unsafe_set(s1, hist.unsafe_get(s1) + g)
+        hist.unsafe_set(s1 + 1, hist.unsafe_get(s1 + 1) + h)
+        hist.unsafe_set(s2, hist.unsafe_get(s2) + g)
+        hist.unsafe_set(s2 + 1, hist.unsafe_get(s2 + 1) + h)
+        hist.unsafe_set(s3, hist.unsafe_get(s3) + g)
+        hist.unsafe_set(s3 + 1, hist.unsafe_get(s3 + 1) + h)
+        hist.unsafe_set(s4, hist.unsafe_get(s4) + g)
+        hist.unsafe_set(s4 + 1, hist.unsafe_get(s4 + 1) + h)
+        hist.unsafe_set(s5, hist.unsafe_get(s5) + g)
+        hist.unsafe_set(s5 + 1, hist.unsafe_get(s5 + 1) + h)
+        hist.unsafe_set(s6, hist.unsafe_get(s6) + g)
+        hist.unsafe_set(s6 + 1, hist.unsafe_get(s6 + 1) + h)
+        hist.unsafe_set(s7, hist.unsafe_get(s7) + g)
+        hist.unsafe_set(s7 + 1, hist.unsafe_get(s7 + 1) + h)
+      }
+      return hist
+    }
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
       let g = qa.unsafe_get(r * 2)

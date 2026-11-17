@@ -26,5 +26,7 @@ options(
     "lockstep_buf_js.mbt": [ "js" ],
     "xgboost_src.mbt": [ "not", "js" ],
     "xgboost_src_js.mbt": [ "js" ],
+    "train_q.mbt": [ "not", "js" ],
+    "train_q_js.mbt": [ "js" ],
   },
 )

@@ -249,7 +249,7 @@ priv struct Grower {
   gh : FixedArray[Float]
   // the same pair quantised to integers and packed as (g << 32) + h, so a
   // histogram slot is one integer add; gs and hs are the scales
-  gq : FixedArray[Int64]
+  gq : QArr
   mut gs : Double
   mut hs : Double
   mut igs : Double // 1 / gs
@@ -275,7 +275,7 @@ priv struct Grower {
   // word count into spare slots past nbins
   wbase : FixedArray[Int32]
   cbins16 : FixedArray[FixedArray[UInt16]]
-  cq : FixedArray[FixedArray[Int64]]
+  cq : FixedArray[QArr]
   cgh : FixedArray[FixedArray[Float]]
   orig : FixedArray[FixedArray[Int32]]
   mut ihs : Double // 1 / hs
@@ -307,48 +307,6 @@ fn Grower::set_scales(
 }
 
 ///|
-/// Truncation toward zero for a value known to be in Int64 range: the
-/// quantised gradients are bounded by the scales, so the NaN and range
-/// checks of `Double::to_int64` are not needed.
-fn trunc64(x : Double) -> Int64 = "%f64_to_i64"
-
-///|
-/// Quantises a gradient pair, rounding half away from zero (h is never
-/// negative), and packs it as (g << 32) + h.
-fn Grower::pack(self : Grower, g : Double, h : Double) -> Int64 {
-  let x = g * self.gs
-  // 0.5 with the sign of x, from its bits: the sign of a gradient is
-  // unpredictable, so a branch on it would often be mispredicted
-  let half = ((x.reinterpret_as_int64() & (1L << 63)) | 0x3FE0000000000000L).reinterpret_as_double()
-  let gi = trunc64(x + half)
-  (gi << 32) + trunc64(h * self.hs + 0.5)
-}
-
-///|
-/// exp to about 1e-9 relative error, ample for gradients that are rounded
-/// to float32: x = k ln2 + r with |r| <= ln2 / 2, a degree-7 polynomial for
-/// e^r, and 2^k built from its exponent bits. x is clamped to +-80, where
-/// the losses are saturated.
-fn train_exp(x : Double) -> Double {
-  let x = if x > 80.0 { 80.0 } else if x < -80.0 { -80.0 } else { x }
-  // k = round(x / ln2) by the 1.5 * 2^52 trick, without a branch or a
-  // checked conversion
-  let kd = x * 1.4426950408889634 + 6755399441055744.0
-  let ki = kd.reinterpret_as_int64() - 0x4338000000000000L
-  let kf = kd - 6755399441055744.0
-  let r = x - kf * 0.6931471803691238 - kf * 1.9082149292705877e-10
-  // Estrin's scheme: a shorter dependency chain than Horner's
-  let r2 = r * r
-  let r4 = r2 * r2
-  let p = 1.0 +
-    r +
-    r2 * (0.5 + r * (1.0 / 6.0)) +
-    r4 *
-    (1.0 / 24.0 + r * (1.0 / 120.0) + r2 * (1.0 / 720.0 + r * (1.0 / 5040.0)))
-  p * ((ki + 1023L) << 52).reinterpret_as_double()
-}
-
-///|
 fn Grower::weight(self : Grower, g : Double, h : Double) -> Double {
   -g / (h + self.p.lambda)
 }
@@ -356,116 +314,6 @@ fn Grower::weight(self : Grower, g : Double, h : Double) -> Double {
 ///|
 fn Grower::score(self : Grower, g : Double, h : Double) -> Double {
   g * g / (h + self.p.lambda)
-}
-
-///|
-/// Gradient and hessian sums per bin for rows[lo:hi].
-fn Grower::histogram(
-  self : Grower,
-  lo : Int32,
-  hi : Int32,
-  level : Int32,
-) -> FixedArray[Int64] {
-  let rows = self.rows
-  if self.narrow {
-    let hist = FixedArray::make(self.nbins + 8, 0L)
-    let (cb, cq) = if level > 0 {
-      (self.cbins[level - 1], self.cq[level - 1])
-    } else {
-      (self.bins8, self.gq)
-    }
-    let wb = self.wbase
-    let words = self.words
-    if words == 1 {
-      // the slot bases in locals: hist stores could alias wbase for the C
-      // compiler, which would reload it for every byte
-      let b0 = wb[0]
-      let b1 = wb[1]
-      let b2 = wb[2]
-      let b3 = wb[3]
-      let b4 = wb[4]
-      let b5 = wb[5]
-      let b6 = wb[6]
-      let b7 = wb[7]
-      for i in lo..<hi {
-        let r = rows.unsafe_get(i)
-        let q = cq.unsafe_get(r)
-        let x = cb.unsafe_get(r)
-        let s0 = (x & 255UL).to_int() + b0
-        let s1 = ((x >> 8) & 255UL).to_int() + b1
-        let s2 = ((x >> 16) & 255UL).to_int() + b2
-        let s3 = ((x >> 24) & 255UL).to_int() + b3
-        let s4 = ((x >> 32) & 255UL).to_int() + b4
-        let s5 = ((x >> 40) & 255UL).to_int() + b5
-        let s6 = ((x >> 48) & 255UL).to_int() + b6
-        let s7 = (x >> 56).to_int() + b7
-        hist.unsafe_set(s0, hist.unsafe_get(s0) + q)
-        hist.unsafe_set(s1, hist.unsafe_get(s1) + q)
-        hist.unsafe_set(s2, hist.unsafe_get(s2) + q)
-        hist.unsafe_set(s3, hist.unsafe_get(s3) + q)
-        hist.unsafe_set(s4, hist.unsafe_get(s4) + q)
-        hist.unsafe_set(s5, hist.unsafe_get(s5) + q)
-        hist.unsafe_set(s6, hist.unsafe_get(s6) + q)
-        hist.unsafe_set(s7, hist.unsafe_get(s7) + q)
-      }
-      return hist
-    }
-    for i in lo..<hi {
-      let r = rows.unsafe_get(i)
-      let q = cq.unsafe_get(r)
-      let base = r * words
-      for w in 0..<words {
-        let x = cb.unsafe_get(base + w)
-        let o = w * 8
-        let s0 = (x & 255UL).to_int() + wb.unsafe_get(o)
-        let s1 = ((x >> 8) & 255UL).to_int() + wb.unsafe_get(o + 1)
-        let s2 = ((x >> 16) & 255UL).to_int() + wb.unsafe_get(o + 2)
-        let s3 = ((x >> 24) & 255UL).to_int() + wb.unsafe_get(o + 3)
-        hist.unsafe_set(s0, hist.unsafe_get(s0) + q)
-        hist.unsafe_set(s1, hist.unsafe_get(s1) + q)
-        hist.unsafe_set(s2, hist.unsafe_get(s2) + q)
-        hist.unsafe_set(s3, hist.unsafe_get(s3) + q)
-        let s4 = ((x >> 32) & 255UL).to_int() + wb.unsafe_get(o + 4)
-        let s5 = ((x >> 40) & 255UL).to_int() + wb.unsafe_get(o + 5)
-        let s6 = ((x >> 48) & 255UL).to_int() + wb.unsafe_get(o + 6)
-        let s7 = (x >> 56).to_int() + wb.unsafe_get(o + 7)
-        hist.unsafe_set(s4, hist.unsafe_get(s4) + q)
-        hist.unsafe_set(s5, hist.unsafe_get(s5) + q)
-        hist.unsafe_set(s6, hist.unsafe_get(s6) + q)
-        hist.unsafe_set(s7, hist.unsafe_get(s7) + q)
-      }
-    }
-    return hist
-  }
-  let hist = FixedArray::make(self.nbins, 0L)
-  let cols = self.data.cols
-  let bins = if level > 0 { self.cbins16[level - 1] } else { self.data.bins }
-  let gq = if level > 0 { self.cq[level - 1] } else { self.gq }
-  // indices are in range by construction: rows hold row numbers and bins
-  // hold histogram slots
-  for i in lo..<hi {
-    let r = rows.unsafe_get(i)
-    let q = gq.unsafe_get(r)
-    let base = r * cols
-    let mut f = 0
-    while f + 4 <= cols {
-      let s0 = bins.unsafe_get(base + f).to_int()
-      let s1 = bins.unsafe_get(base + f + 1).to_int()
-      let s2 = bins.unsafe_get(base + f + 2).to_int()
-      let s3 = bins.unsafe_get(base + f + 3).to_int()
-      hist.unsafe_set(s0, hist.unsafe_get(s0) + q)
-      hist.unsafe_set(s1, hist.unsafe_get(s1) + q)
-      hist.unsafe_set(s2, hist.unsafe_get(s2) + q)
-      hist.unsafe_set(s3, hist.unsafe_get(s3) + q)
-      f += 4
-    }
-    while f < cols {
-      let slot = bins.unsafe_get(base + f).to_int()
-      hist.unsafe_set(slot, hist.unsafe_get(slot) + q)
-      f += 1
-    }
-  }
-  hist
 }
 
 ///|
@@ -500,7 +348,7 @@ fn Grower::compact(
       for w in 0..<words {
         tb.unsafe_set(dst + w, b8.unsafe_get(src + w))
       }
-      tq.unsafe_set(i, q.unsafe_get(r))
+      q_copy(tq, i, q, r)
       tg.unsafe_set(i * 2, gh.unsafe_get(r * 2))
       tg.unsafe_set(i * 2 + 1, gh.unsafe_get(r * 2 + 1))
       to.unsafe_set(i, r)
@@ -515,7 +363,7 @@ fn Grower::compact(
       for f in 0..<cols {
         tw.unsafe_set(dst + f, bins.unsafe_get(src + f))
       }
-      tq.unsafe_set(i, q.unsafe_get(r))
+      q_copy(tq, i, q, r)
       tg.unsafe_set(i * 2, gh.unsafe_get(r * 2))
       tg.unsafe_set(i * 2 + 1, gh.unsafe_get(r * 2 + 1))
       to.unsafe_set(i, r)
@@ -525,16 +373,9 @@ fn Grower::compact(
 }
 
 ///|
-/// Splits a packed histogram sum into its gradient and hessian.
-fn Grower::unpack(self : Grower, q : Int64) -> (Double, Double) {
-  let h = q & 0xFFFFFFFFL
-  (((q - h) >> 32).to_double() * self.igs, h.to_double() * self.ihs)
-}
-
-///|
 fn Grower::best_split(
   self : Grower,
-  hist : FixedArray[Int64],
+  hist : Hist,
   g : Double,
   h : Double,
 ) -> Split? {
@@ -549,16 +390,23 @@ fn Grower::best_split(
     if n < 2 {
       continue
     }
-    let (mg, mh) = self.unpack(hist[start - 1])
-    let mut ql = 0L
+    guard start + n - 1 <= hist_len(hist) else { abort("short histogram") }
+    let mg = hist_g(hist, start - 1) * self.igs
+    let mh = hist_h(hist, start - 1) * self.ihs
+    // the quantised sums are integers below 2^53, exact in a Double
+    let mut qg = 0.0
+    let mut qh = 0.0
     for b in 0..<(n - 1) {
-      let q = hist[start + b]
+      let bg = hist_g(hist, start + b)
+      let bh = hist_h(hist, start + b)
       // an empty bin repeats the previous split, which cannot gain more
-      if q == 0L {
+      if bg == 0.0 && bh == 0.0 {
         continue
       }
-      ql = ql + q
-      let (gl, hl) = self.unpack(ql)
+      qg = qg + bg
+      qh = qh + bh
+      let gl = qg * self.igs
+      let hl = qh * self.ihs
       // missing values to the right
       let gr = g - gl
       let hr = h - hl
@@ -737,7 +585,7 @@ fn Grower::partition_copy(
       for w in 0..<words {
         tb.unsafe_set(at + w, b8.unsafe_get(src + w))
       }
-      tq.unsafe_set(p, q.unsafe_get(r))
+      q_copy(tq, p, q, r)
       tg.unsafe_set(p * 2, gh.unsafe_get(r * 2))
       tg.unsafe_set(p * 2 + 1, gh.unsafe_get(r * 2 + 1))
       to.unsafe_set(p, r)
@@ -760,7 +608,7 @@ fn Grower::partition_copy(
       for f in 0..<cols {
         tw.unsafe_set(at + f, bins.unsafe_get(src + f))
       }
-      tq.unsafe_set(p, q.unsafe_get(r))
+      q_copy(tq, p, q, r)
       tg.unsafe_set(p * 2, gh.unsafe_get(r * 2))
       tg.unsafe_set(p * 2 + 1, gh.unsafe_get(r * 2 + 1))
       to.unsafe_set(p, r)
@@ -781,7 +629,7 @@ fn Grower::grow(
   node : Int32,
   lo : Int32,
   hi : Int32,
-  hist : FixedArray[Int64],
+  hist : Hist,
   g : Double,
   h : Double,
   depth : Int32,
@@ -873,9 +721,7 @@ fn Grower::grow(
         }
         let small = self.histogram(small_lo, small_hi, level)
         // the parent's histogram becomes the larger child's
-        for i in 0..<hist.length() {
-          hist[i] = hist[i] - small[i]
-        }
+        hist_sub(hist, small)
         if small_lo == lo {
           (small, hist)
         } else {
@@ -1068,7 +914,7 @@ fn train_json(
   let cbase = FixedArray::makei(data.cols, fn(f) {
     hist_start[f] + (if binned.missing[f] { 0 } else { 1 })
   })
-  let mut narrow = allow_narrow
+  let mut narrow = allow_narrow && narrow_bins
   for f in 0..<data.cols {
     if hist_start[f + 1] - 1 - cbase[f] > 255 {
       narrow = false
@@ -1109,7 +955,7 @@ fn train_json(
     data: binned,
     p,
     gh: FixedArray::make(n * 2, (0.0 : Float)),
-    gq: FixedArray::make(n, 0L),
+    gq: qarr_make(n),
     gs: 1.0,
     hs: 1.0,
     igs: 1.0,
@@ -1128,7 +974,7 @@ fn train_json(
       }
     }),
     cbins16: FixedArray::makei(1, fn(_) { FixedArray::make(copies, 0) }),
-    cq: FixedArray::makei(1, fn(_) { FixedArray::make(n, 0L) }),
+    cq: FixedArray::makei(1, fn(_) { qarr_make(n) }),
     cgh: FixedArray::makei(1, fn(_) { FixedArray::make(n * 2, (0.0 : Float)) }),
     orig: FixedArray::makei(1, fn(_) { FixedArray::make(n, 0) }),
     ihs: 1.0,
@@ -1191,7 +1037,6 @@ fn train_json(
         1 => gr.set_scales(n, 1.0, 0.25)
         _ => gr.set_scales(n, 1.0, 0.5)
       }
-      let mut qsum = 0L
       let gh = gr.gh
       let gq = gr.gq
       let rows = gr.rows
@@ -1216,17 +1061,23 @@ fn train_json(
         let h = Float::from_double(h).to_double()
         gh.unsafe_set(r * 2, Float::from_double(g))
         gh.unsafe_set(r * 2 + 1, Float::from_double(h))
-        let q = gr.pack(g, h)
-        gq.unsafe_set(r, q)
-        qsum = qsum + q
+        gr.pack_at(gq, r, g, h)
         rows.unsafe_set(r, r)
         gsum += g
         hsum += h
       }
-      let (qg, qh) = gr.unpack(qsum)
       let tree = GrowTree::new()
       let root = tree.add(-1, gr.weight(gsum, hsum), hsum)
-      gr.grow(tree, root, 0, n, gr.histogram(0, n, 0), qg, qh, 0, 0)
+      let hist = gr.histogram(0, n, 0)
+      // every row is in exactly one slot of feature 0, so those slots sum
+      // to the quantised totals
+      let mut qg = 0.0
+      let mut qh = 0.0
+      for slot in hist_start[0]..<hist_start[1] {
+        qg = qg + hist_g(hist, slot)
+        qh = qh + hist_h(hist, slot)
+      }
+      gr.grow(tree, root, 0, n, hist, qg * gr.igs, qh * gr.ihs, 0, 0)
       let o = gr.orig[0]
       for i in 0..<n {
         let at = o[i] * groups + k

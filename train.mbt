@@ -806,27 +806,31 @@ fn Grower::grow(
       let mut eg = 0.0
       let mut eh = 0.0
       let gh = if level > 0 { self.cgh[level - 1] } else { self.gh }
-      for i in lo..<hi {
-        let r = self.rows[i]
-        eg += gh[r * 2].to_double()
-        eh += gh[r * 2 + 1].to_double()
-      }
-      let leaf = Float::from_double(self.weight(eg, eh) * self.p.eta)
-      tree.split_cond[node] = leaf
+      let rows = self.rows
+      let leaf_at = self.leaf_at
+      // indices are in range: rows[lo:hi] are rows or copied positions
       // positions in rows[lo:hi] are those of one copy level (there is at
       // most one); a leaf above it is given the positions lo..hi, which no
       // copied subtree uses
       if level > 0 {
         for i in lo..<hi {
-          self.leaf_at[self.rows[i]] = node
+          let r = rows.unsafe_get(i)
+          eg += gh.unsafe_get(r * 2).to_double()
+          eh += gh.unsafe_get(r * 2 + 1).to_double()
+          leaf_at.unsafe_set(r, node)
         }
       } else {
         let o = self.orig[0]
         for i in lo..<hi {
-          o[i] = self.rows[i]
-          self.leaf_at[i] = node
+          let r = rows.unsafe_get(i)
+          eg += gh.unsafe_get(r * 2).to_double()
+          eh += gh.unsafe_get(r * 2 + 1).to_double()
+          o.unsafe_set(i, r)
+          leaf_at.unsafe_set(i, node)
         }
       }
+      let leaf = Float::from_double(self.weight(eg, eh) * self.p.eta)
+      tree.split_cond[node] = leaf
     }
     Some(s) => {
       // a node just above the copy depth partitions its rows straight

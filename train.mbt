@@ -301,6 +301,12 @@ fn Grower::set_scales(
 }
 
 ///|
+/// Truncation toward zero for a value known to be in Int64 range: the
+/// quantised gradients are bounded by the scales, so the NaN and range
+/// checks of `Double::to_int64` are not needed.
+fn trunc64(x : Double) -> Int64 = "%f64_to_i64"
+
+///|
 /// Quantises a gradient pair, rounding half away from zero (h is never
 /// negative), and packs it as (g << 32) + h.
 fn Grower::pack(self : Grower, g : Double, h : Double) -> Int64 {
@@ -308,8 +314,8 @@ fn Grower::pack(self : Grower, g : Double, h : Double) -> Int64 {
   // 0.5 with the sign of x, from its bits: the sign of a gradient is
   // unpredictable, so a branch on it would often be mispredicted
   let half = ((x.reinterpret_as_int64() & (1L << 63)) | 0x3FE0000000000000L).reinterpret_as_double()
-  let gi = (x + half).to_int64()
-  (gi << 32) + (h * self.hs + 0.5).to_int64()
+  let gi = trunc64(x + half)
+  (gi << 32) + trunc64(h * self.hs + 0.5)
 }
 
 ///|
@@ -1113,6 +1119,9 @@ fn train_json(
         _ => gr.set_scales(n, 1.0, 0.5)
       }
       let mut qsum = 0L
+      let gh = gr.gh
+      let gq = gr.gq
+      let rows = gr.rows
       for r in 0..<n {
         let y = label[r].to_double()
         let m = margin[r * groups + k].to_double()
@@ -1132,12 +1141,12 @@ fn train_json(
         }
         let g = Float::from_double(g).to_double()
         let h = Float::from_double(h).to_double()
-        gr.gh[r * 2] = Float::from_double(g)
-        gr.gh[r * 2 + 1] = Float::from_double(h)
+        gh.unsafe_set(r * 2, Float::from_double(g))
+        gh.unsafe_set(r * 2 + 1, Float::from_double(h))
         let q = gr.pack(g, h)
-        gr.gq[r] = q
+        gq.unsafe_set(r, q)
         qsum = qsum + q
-        gr.rows[r] = r
+        rows.unsafe_set(r, r)
         gsum += g
         hsum += h
       }

@@ -547,6 +547,24 @@ fn Grower::best_split(
 }
 
 ///|
+/// For one-byte bins: whether each byte of the split feature goes left
+/// (1) or right (0).
+fn Grower::left_table(self : Grower, s : Split) -> FixedArray[Int32] {
+  let limit = s.bin + 1
+  let miss = if s.default_left { 0 } else { 1 << 20 }
+  let add = self.cbase[s.feature] - self.hist_start[s.feature]
+  FixedArray::makei(256, fn(byte) {
+    let bin = byte + add
+    let key = bin + (((bin - 1) >> 31) & miss)
+    if key <= limit {
+      1
+    } else {
+      0
+    }
+  })
+}
+
+///|
 /// Moves rows[lo:hi] going left to the front; returns where the right part
 /// starts.
 fn Grower::partition(
@@ -573,12 +591,10 @@ fn Grower::partition(
     } else {
       (self.by8, 1, s.feature * self.leaf_at.length())
     }
-    let add = self.cbase[s.feature] - self.hist_start[s.feature]
+    let go = self.left_table(s)
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
-      let bin = cb.unsafe_get(r * stride + column).to_int() + add
-      let key = bin + (((bin - 1) >> 31) & miss)
-      let left = if key <= limit { 1 } else { 0 }
+      let left = go.unsafe_get(cb.unsafe_get(r * stride + column).to_int())
       dst.unsafe_set(a, r)
       dst.unsafe_set(b, r)
       a += left
@@ -648,12 +664,10 @@ fn Grower::partition_copy(
     let b8 = self.bins8
     let tb = self.cbins[0]
     let column = s.feature * n
-    let add = self.cbase[s.feature] - self.hist_start[s.feature]
+    let go = self.left_table(s)
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
-      let bin = by8.unsafe_get(r + column).to_int() + add
-      let key = bin + (((bin - 1) >> 31) & miss)
-      let left = if key <= limit { 1 } else { 0 }
+      let left = go.unsafe_get(by8.unsafe_get(r + column).to_int())
       let p = b + (a - b) * left
       let src = r * cols
       let at = p * cols

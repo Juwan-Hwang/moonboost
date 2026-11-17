@@ -43,6 +43,7 @@ trust because it is tested against XGBoost itself.
 | Browser demo (`docs/`, GitHub Pages) | done |
 | XGBoost UBJSON models (`.ubj`) | done |
 | Training: histogram trees for `reg:squarederror`, `binary:logistic`, `multi:softprob`, `multi:softmax`, written as XGBoost JSON | done |
+| Training in browsers: JS, and a WebAssembly GC module (`webgc/`) | done |
 
 Later: multithreaded training and batch prediction, once MoonBit ships
 official support for parallelism. Everything here runs on one thread today.
@@ -86,23 +87,29 @@ values (`bench/train_data.py`, `bench/train_compare.py`; ARM sandbox):
 
 On the [GBM-perf](https://github.com/szilard/GBM-perf) airline data (1M
 training rows, 100k test rows, 100 rounds, depth 10, eta 0.1, one thread
-pinned to one core of an x86 AMD EPYC VM; the 8 categorical columns are
-label-encoded, which differs from GBM-perf's own setup), two runs each:
+pinned to one core of an otherwise idle 4-vCPU x86 AMD EPYC VM; the 8
+categorical columns are label-encoded, which differs from GBM-perf's own
+setup), two runs each:
 
 | Library | Training time | Test AUC |
 |---|---|---|
-| moonboost native | 5.3 s, 5.7 s | 0.7537 |
-| XGBoost 3.4.1 `hist` | 11.1 s, 11.8 s | 0.7533 |
-| LightGBM 4.7.0 (`num_leaves=1024`, `max_depth=10`) | 7.9 s, 8.2 s | 0.7545 |
+| moonboost native | 3.9 s, 3.9 s | 0.7537 |
+| moonboost wasm-gc (Node 26) | 5.6 s | 0.7537 |
+| moonboost JS (Node 26) | 12.6 s | 0.7537 |
+| XGBoost 3.4.1 `hist` | 7.5 s, 7.7 s | 0.7533 |
+| LightGBM 4.7.0 (`num_leaves=1024`, `max_depth=10`) | 6.0 s, 6.1 s | 0.7545 |
 
-moonboost takes about half the time of XGBoost and about 30% less
-than LightGBM here (`bench/gbmperf_compare.py`; all three in the same session).
+moonboost native takes about half the time of XGBoost and about 35% less
+than LightGBM here (`bench/gbmperf_compare.py`; all three in the same
+session). moonboost's times leave out reading the CSV.
 
-The same training runs in the browser through the ES module's `train`, and
-builds the same model bit for bit: the JS build keeps the quantised sums in
-Doubles (Int64 would be a BigInt there) and its buffers in typed arrays. On
-the airline data above it takes about 34 s in Node 22 (6.0 s native, same
-session).
+Training also runs in the browser, and every build makes the same model bit
+for bit. `webgc/` is a 37 KB WebAssembly GC module with a loader,
+`web/train_wasm.mjs` (`bench/train_wasm_bench.mjs` times it); in Node it
+trains the airline model above faster than native XGBoost and LightGBM.
+The ES module's `train` does the same in plain JS, at about twice the
+wasm-gc time: there the quantised sums are Doubles (Int64 would be a
+BigInt) and the buffers typed arrays.
 
 ## Correctness
 
@@ -473,7 +480,15 @@ and `predict_lightgbm_raw(model, row)`. An XGBoost `.ubj` file loads with
 `load_model_ubjson(bytes)`, where `bytes` is a `Uint8Array`.
 `train(rows, cols, labels, objective, num_class, num_round, max_depth, eta)`
 trains in the page and returns XGBoost JSON text (`-1` or `""` keeps a
-default).
+default). For about twice the speed, train with the WebAssembly GC module
+(build it with `moon build --target wasm-gc --release`; it is
+`_build/wasm-gc/release/build/webgc/webgc.wasm`):
+
+```js
+import { loadTrainer } from "./train_wasm.mjs";
+const train = await loadTrainer("webgc.wasm");
+const json = train(rows, cols, labels, "binary:logistic", -1, 100, 6, 0.3);
+```
 
 See `examples/node/iris.mjs`.
 

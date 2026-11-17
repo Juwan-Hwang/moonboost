@@ -1,0 +1,23 @@
+import {
+  "Juwan-Hwang/moonboost",
+}
+
+options(
+  link: {
+    "wasm-gc": {
+      "exports": [
+        "train_alloc",
+        "train_set",
+        "train_label",
+        "train_run",
+        "train_char",
+        "train_error_char",
+      ],
+    },
+  },
+)
+
+import {
+  "Juwan-Hwang/moonboost/webgc",
+  "moonbitlang/core/double",
+} for "test"

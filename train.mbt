@@ -52,8 +52,8 @@ priv struct Binned {
   // for two-byte training, the histogram slot of row r in feature f at
   // bins[r * cols + f]: `cut_start[f] + 2 * f` when missing, then one per
   // bin (filled by training only when needed)
-  mut bins : FixedArray[UInt16]
-  by_col : FixedArray[UInt16]
+  mut bins : U16s
+  by_col : U16s
   // cut points of feature f are cuts[cut_start[f] .. cut_start[f + 1]]
   cuts : Array[Float]
   cut_start : FixedArray[Int32]
@@ -126,7 +126,7 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
   let cols = m.cols
   let cuts : Array[Float] = []
   let cut_start = FixedArray::make(cols + 1, 0)
-  let by_col : FixedArray[UInt16] = FixedArray::make(rows * cols, 0)
+  let by_col = u16s_make(rows * cols)
   let missing = FixedArray::make(cols, false)
   for f in 0..<cols {
     let vals = sorted_column(m, f)
@@ -176,11 +176,11 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
           k += (fc.unsafe_get(k + half) <= v).to_int() * (len - half)
           len = half
         }
-        by_col[f * rows + r] = (k + 1).to_uint16()
+        by_col.unsafe_set(f * rows + r, (k + 1).to_uint16())
       }
     }
   }
-  { cols, bins: FixedArray::make(0, 0), by_col, cuts, cut_start, missing, }
+  { cols, bins: u16s_make(0), by_col, cuts, cut_start, missing, }
 }
 
 ///|
@@ -246,7 +246,7 @@ priv struct Grower {
   data : Binned
   p : TrainParams
   // gradient and hessian of row r at 2r and 2r + 1
-  gh : FixedArray[Float]
+  gh : F32s
   // the same pair quantised to integers and packed as (g << 32) + h, so a
   // histogram slot is one integer add; gs and hs are the scales
   gq : QArr
@@ -274,18 +274,18 @@ priv struct Grower {
   // cbase per byte of the row words; the padding bytes of a last, partial
   // word count into spare slots past nbins
   wbase : FixedArray[Int32]
-  cbins16 : FixedArray[FixedArray[UInt16]]
+  cbins16 : FixedArray[U16s]
   cq : FixedArray[QArr]
-  cgh : FixedArray[FixedArray[Float]]
-  orig : FixedArray[FixedArray[Int32]]
+  cgh : FixedArray[F32s]
+  orig : FixedArray[I32s]
   mut ihs : Double // 1 / hs
   // rows of the nodes at the current depth; partitioning writes the
   // children's rows to `scratch`, and the two swap while the children grow
-  mut rows : FixedArray[Int32]
-  mut scratch : FixedArray[Int32]
+  mut rows : I32s
+  mut scratch : I32s
   // leaf node reached by each copied position (orig[0] maps positions to
   // rows); a leaf above the copy depth fills its own positions and orig[0]
-  leaf_at : FixedArray[Int32]
+  leaf_at : I32s
   nbins : Int32 // total histogram slots: per feature, missing + (cuts + 1)
   hist_start : FixedArray[Int32]
 }
@@ -943,10 +943,13 @@ fn train_json(
       }
     }
   } else {
-    let bins = FixedArray::make(n * cols, (0 : UInt16))
+    let bins = u16s_make(n * cols)
     for f in 0..<cols {
       for r in 0..<n {
-        bins[r * cols + f] = (by_col[f * n + r].to_int() + hist_start[f]).to_uint16()
+        bins.unsafe_set(
+          r * cols + f,
+          (by_col.unsafe_get(f * n + r).to_int() + hist_start[f]).to_uint16(),
+        )
       }
     }
     binned.bins = bins
@@ -954,7 +957,7 @@ fn train_json(
   let gr : Grower = {
     data: binned,
     p,
-    gh: FixedArray::make(n * 2, (0.0 : Float)),
+    gh: f32s_make(n * 2),
     gq: qarr_make(n),
     gs: 1.0,
     hs: 1.0,
@@ -973,14 +976,14 @@ fn train_json(
         hist_start[cols] + i % 8
       }
     }),
-    cbins16: FixedArray::makei(1, fn(_) { FixedArray::make(copies, 0) }),
+    cbins16: FixedArray::makei(1, fn(_) { u16s_make(copies) }),
     cq: FixedArray::makei(1, fn(_) { qarr_make(n) }),
-    cgh: FixedArray::makei(1, fn(_) { FixedArray::make(n * 2, (0.0 : Float)) }),
-    orig: FixedArray::makei(1, fn(_) { FixedArray::make(n, 0) }),
+    cgh: FixedArray::makei(1, fn(_) { f32s_make(n * 2) }),
+    orig: FixedArray::makei(1, fn(_) { i32s_make(n) }),
     ihs: 1.0,
-    rows: FixedArray::make(n, 0),
-    scratch: FixedArray::make(n, 0),
-    leaf_at: FixedArray::make(n, 0),
+    rows: i32s_make(n),
+    scratch: i32s_make(n),
+    leaf_at: i32s_make(n),
     nbins: hist_start[data.cols],
     hist_start,
   }
@@ -1080,8 +1083,8 @@ fn train_json(
       gr.grow(tree, root, 0, n, hist, qg * gr.igs, qh * gr.ihs, 0, 0)
       let o = gr.orig[0]
       for i in 0..<n {
-        let at = o[i] * groups + k
-        margin[at] = margin[at] + tree.split_cond[gr.leaf_at[i]]
+        let at = o.unsafe_get(i) * groups + k
+        margin[at] = margin[at] + tree.split_cond[gr.leaf_at.unsafe_get(i)]
       }
       if num_trees > 0 {
         trees.write_char(',')

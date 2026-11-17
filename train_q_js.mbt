@@ -3,11 +3,77 @@
 /// integer-valued Doubles per row, g at 2r and h at 2r + 1. The sums stay
 /// below 2^53, so they are exact and equal to the packed sums of the other
 /// backends.
-type QArr = FixedArray[Double]
+type QArr = F64
 
 ///|
 /// Histogram slots for JS: the g sum of slot s at 2s, its h sum at 2s + 1.
-type Hist = FixedArray[Double]
+type Hist = F64
+
+///|
+/// A `Float64Array`: zero-filled on allocation and read without boxing,
+/// unlike a JS array built element by element.
+#external
+priv type F64
+
+///|
+extern "js" fn F64::new(n : Int32) -> F64 = "(n) => new Float64Array(n)"
+
+///|
+extern "js" fn F64::length(self : F64) -> Int32 = "(a) => a.length"
+
+///|
+extern "js" fn F64::unsafe_get(self : F64, i : Int32) -> Double = "(a, i) => a[i]"
+
+///|
+extern "js" fn F64::unsafe_set(self : F64, i : Int32, v : Double) -> Unit = "(a, i, v) => { a[i] = v; }"
+
+///|
+/// Two-byte bins as a `Uint16Array`: half the memory of a JS array.
+#external
+priv type U16s
+
+///|
+extern "js" fn u16s_make(n : Int32) -> U16s = "(n) => new Uint16Array(n)"
+
+///|
+extern "js" fn U16s::unsafe_get(self : U16s, i : Int32) -> UInt16 = "(a, i) => a[i]"
+
+///|
+extern "js" fn U16s::unsafe_set(self : U16s, i : Int32, v : UInt16) -> Unit = "(a, i, v) => { a[i] = v; }"
+
+///|
+/// Row numbers and positions as an `Int32Array`.
+#external
+priv type I32s
+
+///|
+extern "js" fn i32s_make(n : Int32) -> I32s = "(n) => new Int32Array(n)"
+
+///|
+extern "js" fn I32s::length(self : I32s) -> Int32 = "(a) => a.length"
+
+///|
+extern "js" fn I32s::unsafe_get(self : I32s, i : Int32) -> Int32 = "(a, i) => a[i]"
+
+///|
+extern "js" fn I32s::unsafe_set(self : I32s, i : Int32, v : Int32) -> Unit = "(a, i, v) => { a[i] = v; }"
+
+///|
+/// Exact gradient pairs as a `Float32Array`.
+#external
+priv type F32s
+
+///|
+extern "js" fn f32s_make(n : Int32) -> F32s = "(n) => new Float32Array(n)"
+
+///|
+extern "js" fn F32s::length(self : F32s) -> Int32 = "(a) => a.length"
+
+///|
+extern "js" fn F32s::unsafe_get(self : F32s, i : Int32) -> Float = "(a, i) => a[i]"
+
+///|
+extern "js" fn F32s::unsafe_set(self : F32s, i : Int32, v : Float) -> Unit = "(a, i, v) => { a[i] = v; }"
 
 ///|
 /// Bins packed into 64-bit words would be BigInts in JS: keep two-byte bins.
@@ -15,7 +81,7 @@ let narrow_bins : Bool = false
 
 ///|
 fn qarr_make(n : Int32) -> QArr {
-  FixedArray::make(n * 2, 0.0)
+  F64::new(n * 2)
 }
 
 ///|
@@ -42,7 +108,7 @@ fn hist_h(hist : Hist, slot : Int32) -> Double {
 ///|
 fn hist_sub(hist : Hist, small : Hist) -> Unit {
   for i in 0..<hist.length() {
-    hist[i] = hist[i] - small[i]
+    hist.unsafe_set(i, hist.unsafe_get(i) - small.unsafe_get(i))
   }
 }
 
@@ -105,7 +171,7 @@ fn Grower::histogram(
   // the one-byte slot bases are only read by the other backends
   ignore(self.wbase)
   let rows = self.rows
-  let hist = FixedArray::make(self.nbins * 2, 0.0)
+  let hist = F64::new(self.nbins * 2)
   let cols = self.data.cols
   let bins = if level > 0 { self.cbins16[level - 1] } else { self.data.bins }
   let qa = if level > 0 { self.cq[level - 1] } else { self.gq }

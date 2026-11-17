@@ -8,6 +8,33 @@ type QArr = FixedArray[Int64]
 type Hist = FixedArray[Int64]
 
 ///|
+/// Two-byte bins.
+type U16s = FixedArray[UInt16]
+
+///|
+fn u16s_make(n : Int32) -> U16s {
+  FixedArray::make(n, 0)
+}
+
+///|
+/// Row numbers and positions.
+type I32s = FixedArray[Int32]
+
+///|
+fn i32s_make(n : Int32) -> I32s {
+  FixedArray::make(n, 0)
+}
+
+///|
+/// Exact gradient pairs, g at 2r and h at 2r + 1.
+type F32s = FixedArray[Float]
+
+///|
+fn f32s_make(n : Int32) -> F32s {
+  FixedArray::make(n, 0.0)
+}
+
+///|
 /// Whether bins may be packed eight to a 64-bit word.
 let narrow_bins : Bool = true
 

@@ -121,6 +121,130 @@ fn sorted_column(m : DenseMatrix, f : Int32) -> FixedArray[Float] {
 }
 
 ///|
+/// Rows per call of the loops that pass over all rows. Each loop is its
+/// own function, called block by block: WebAssembly engines optimise a
+/// function between calls but not while one call runs, so a loop over all
+/// rows in a function called once would run unoptimised throughout.
+let block : Int32 = 8192
+
+///|
+/// Bins of feature f for rows lo..hi into by_col (feature-major, `rows`
+/// rows), against the feature's sorted cuts fc.
+fn bin_block(
+  data : FixedArray[Float],
+  cols : Int32,
+  f : Int32,
+  fc : FixedArray[Float],
+  by_col : U16s,
+  rows : Int32,
+  lo : Int32,
+  hi : Int32,
+) -> Unit {
+  // the bin of a value is one more than the number of cuts <= it, found
+  // by steps that add a 0/1 multiple rather than branch; four rows search
+  // side by side, as each search is one long dependency chain. A missing
+  // value (no cut is <= NaN) keeps bin 0.
+  let mut r = lo
+  while r + 4 <= hi {
+    let v0 = data[r * cols + f]
+    let v1 = data[(r + 1) * cols + f]
+    let v2 = data[(r + 2) * cols + f]
+    let v3 = data[(r + 3) * cols + f]
+    let mut k0 = 0
+    let mut k1 = 0
+    let mut k2 = 0
+    let mut k3 = 0
+    let mut len = fc.length()
+    while len > 0 {
+      let half = len / 2
+      let step = len - half
+      k0 += (fc.unsafe_get(k0 + half) <= v0).to_int() * step
+      k1 += (fc.unsafe_get(k1 + half) <= v1).to_int() * step
+      k2 += (fc.unsafe_get(k2 + half) <= v2).to_int() * step
+      k3 += (fc.unsafe_get(k3 + half) <= v3).to_int() * step
+      len = half
+    }
+    let at = f * rows + r
+    by_col.unsafe_set(at, bin_code(v0, k0))
+    by_col.unsafe_set(at + 1, bin_code(v1, k1))
+    by_col.unsafe_set(at + 2, bin_code(v2, k2))
+    by_col.unsafe_set(at + 3, bin_code(v3, k3))
+    r += 4
+  }
+  while r < hi {
+    let v = data[r * cols + f]
+    let mut k = 0
+    let mut len = fc.length()
+    while len > 0 {
+      let half = len / 2
+      k += (fc.unsafe_get(k + half) <= v).to_int() * (len - half)
+      len = half
+    }
+    by_col.unsafe_set(f * rows + r, bin_code(v, k))
+    r += 1
+  }
+}
+
+///|
+/// One-byte bins of feature f for rows lo..hi: the bin less `adj`, into
+/// the row words and the feature-major bytes.
+fn pack_block(
+  by_col : U16s,
+  bins8 : Words,
+  by8 : FixedArray[Byte],
+  words : Int32,
+  n : Int32,
+  f : Int32,
+  adj : Int32,
+  lo : Int32,
+  hi : Int32,
+) -> Unit {
+  let column = f / word_bins
+  let shift = f % word_bins * 8
+  for r in lo..<hi {
+    let b = (by_col.unsafe_get(f * n + r).to_int() - adj).to_byte()
+    let at = r * words + column
+    bins8.unsafe_set(at, word_put(bins8.unsafe_get(at), b, shift))
+    by8.unsafe_set(f * n + r, b)
+  }
+}
+
+///|
+/// Two-byte bins of feature f for rows lo..hi: histogram slots, row-major.
+fn wide_block(
+  by_col : U16s,
+  bins : U16s,
+  cols : Int32,
+  n : Int32,
+  f : Int32,
+  start : Int32,
+  lo : Int32,
+  hi : Int32,
+) -> Unit {
+  for r in lo..<hi {
+    bins.unsafe_set(
+      r * cols + f,
+      (by_col.unsafe_get(f * n + r).to_int() + start).to_uint16(),
+    )
+  }
+}
+
+///|
+fn block_end(lo : Int32, n : Int32) -> Int32 {
+  if n - lo > block {
+    lo + block
+  } else {
+    n
+  }
+}
+
+///|
+/// The bin of a value with k cuts at or below it: k + 1, or 0 when missing.
+fn bin_code(v : Float, k : Int32) -> UInt16 {
+  (if v.is_nan() { 0 } else { k + 1 }).to_uint16()
+}
+
+///|
 fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
   let rows = m.rows
   let cols = m.cols
@@ -162,21 +286,14 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
     let lo = base
     let hi = cuts.length()
     let fc = FixedArray::makei(hi - lo, fn(i) { cuts[lo + i] })
+    let data = m.data
+    for lo = 0; lo < rows; lo = lo + block {
+      bin_block(data, cols, f, fc, by_col, rows, lo, block_end(lo, rows))
+    }
     for r in 0..<rows {
-      let v = m.data[r * cols + f]
-      if v.is_nan() {
+      if data[r * cols + f].is_nan() {
         missing[f] = true
-      } else {
-        // number of cuts <= v, by steps that add a 0/1 multiple rather
-        // than branch
-        let mut k = 0
-        let mut len = hi - lo
-        while len > 0 {
-          let half = len / 2
-          k += (fc.unsafe_get(k + half) <= v).to_int() * (len - half)
-          len = half
-        }
-        by_col.unsafe_set(f * rows + r, (k + 1).to_uint16())
+        break
       }
     }
   }
@@ -825,6 +942,76 @@ pub fn train_xgboost_json(
 }
 
 ///|
+/// Gradients of class k for rows lo..hi: stores each row's exact pair and
+/// quantised pair and resets rows[r] = r; returns gsum and hsum with the
+/// rows' gradients added in row order.
+fn Grower::gradients(
+  self : Grower,
+  label : ArrayView[Float],
+  margin : FixedArray[Float],
+  probs : FixedArray[Double],
+  groups : Int32,
+  k : Int32,
+  kind : Int32,
+  lo : Int32,
+  hi : Int32,
+  gsum : Double,
+  hsum : Double,
+) -> (Double, Double) {
+  let gh = self.gh
+  let gq = self.gq
+  let rows = self.rows
+  let mut gsum = gsum
+  let mut hsum = hsum
+  for r in lo..<hi {
+    let y = label[r].to_double()
+    let m = margin[r * groups + k].to_double()
+    let (g, h) = match kind {
+      0 => (m - y, 1.0)
+      1 => {
+        let pr = 1.0 / (1.0 + train_exp(-m))
+        let h = pr * (1.0 - pr)
+        (pr - y, if h < 1.0e-16 { 1.0e-16 } else { h })
+      }
+      _ => {
+        let pr = probs[r * groups + k]
+        let t = if y.to_int() == k { 1.0 } else { 0.0 }
+        let h = 2.0 * pr * (1.0 - pr)
+        (pr - t, if h < 1.0e-16 { 1.0e-16 } else { h })
+      }
+    }
+    let g = Float::from_double(g).to_double()
+    let h = Float::from_double(h).to_double()
+    gh.unsafe_set(r * 2, Float::from_double(g))
+    gh.unsafe_set(r * 2 + 1, Float::from_double(h))
+    self.pack_at(gq, r, g, h)
+    rows.unsafe_set(r, r)
+    gsum += g
+    hsum += h
+  }
+  (gsum, hsum)
+}
+
+///|
+/// Adds each copied position's leaf value to its row's margin of class k,
+/// for positions lo..hi.
+fn add_leaves(
+  margin : FixedArray[Float],
+  orig : I32s,
+  leaf_at : I32s,
+  leaves : FixedArray[Float],
+  groups : Int32,
+  k : Int32,
+  lo : Int32,
+  hi : Int32,
+) -> Unit {
+  for i in lo..<hi {
+    let at = orig.unsafe_get(i) * groups + k
+    margin[at] = margin[at] + leaves[leaf_at.unsafe_get(i)]
+  }
+}
+
+///|
 /// `allow_narrow` false forces two-byte copied bins (for tests).
 fn train_json(
   data : DenseMatrix,
@@ -933,23 +1120,23 @@ fn train_json(
     // (whose missing bin is 0)
     for f in 0..<cols {
       let adj = if binned.missing[f] { 0 } else { 1 }
-      for r in 0..<n {
-        let b = (by_col.unsafe_get(f * n + r).to_int() - adj).to_byte()
-        let at = r * words + f / word_bins
-        bins8.unsafe_set(
-          at,
-          word_put(bins8.unsafe_get(at), b, f % word_bins * 8),
-        )
-        by8.unsafe_set(f * n + r, b)
+      for lo = 0; lo < n; lo = lo + block {
+        pack_block(by_col, bins8, by8, words, n, f, adj, lo, block_end(lo, n))
       }
     }
   } else {
     let bins = u16s_make(n * cols)
     for f in 0..<cols {
-      for r in 0..<n {
-        bins.unsafe_set(
-          r * cols + f,
-          (by_col.unsafe_get(f * n + r).to_int() + hist_start[f]).to_uint16(),
+      for lo = 0; lo < n; lo = lo + block {
+        wide_block(
+          by_col,
+          bins,
+          cols,
+          n,
+          f,
+          hist_start[f],
+          lo,
+          block_end(lo, n),
         )
       }
     }
@@ -1041,34 +1228,21 @@ fn train_json(
         1 => gr.set_scales(n, 1.0, 0.25)
         _ => gr.set_scales(n, 1.0, 0.5)
       }
-      let gh = gr.gh
-      let gq = gr.gq
-      let rows = gr.rows
-      for r in 0..<n {
-        let y = label[r].to_double()
-        let m = margin[r * groups + k].to_double()
-        let (g, h) = match kind {
-          0 => (m - y, 1.0)
-          1 => {
-            let pr = 1.0 / (1.0 + train_exp(-m))
-            let h = pr * (1.0 - pr)
-            (pr - y, if h < 1.0e-16 { 1.0e-16 } else { h })
-          }
-          _ => {
-            let pr = probs[r * groups + k]
-            let t = if y.to_int() == k { 1.0 } else { 0.0 }
-            let h = 2.0 * pr * (1.0 - pr)
-            (pr - t, if h < 1.0e-16 { 1.0e-16 } else { h })
-          }
-        }
-        let g = Float::from_double(g).to_double()
-        let h = Float::from_double(h).to_double()
-        gh.unsafe_set(r * 2, Float::from_double(g))
-        gh.unsafe_set(r * 2 + 1, Float::from_double(h))
-        gr.pack_at(gq, r, g, h)
-        rows.unsafe_set(r, r)
-        gsum += g
-        hsum += h
+      for lo = 0; lo < n; lo = lo + block {
+        let (g, h) = gr.gradients(
+          label,
+          margin,
+          probs,
+          groups,
+          k,
+          kind,
+          lo,
+          block_end(lo, n),
+          gsum,
+          hsum,
+        )
+        gsum = g
+        hsum = h
       }
       let tree = GrowTree::new()
       let root = tree.add(-1, gr.weight(gsum, hsum), hsum)
@@ -1082,10 +1256,18 @@ fn train_json(
         qh = qh + hist_h(hist, slot)
       }
       gr.grow(tree, root, 0, n, hist, qg * gr.igs, qh * gr.ihs, 0, 0)
-      let o = gr.orig[0]
-      for i in 0..<n {
-        let at = o.unsafe_get(i) * groups + k
-        margin[at] = margin[at] + tree.split_cond[gr.leaf_at.unsafe_get(i)]
+      let leaves = FixedArray::from_array(tree.split_cond)
+      for lo = 0; lo < n; lo = lo + block {
+        add_leaves(
+          margin,
+          gr.orig[0],
+          gr.leaf_at,
+          leaves,
+          groups,
+          k,
+          lo,
+          block_end(lo, n),
+        )
       }
       if num_trees > 0 {
         trees.write_char(',')

@@ -76,8 +76,32 @@ extern "js" fn F32s::unsafe_get(self : F32s, i : Int32) -> Float = "(a, i) => a[
 extern "js" fn F32s::unsafe_set(self : F32s, i : Int32, v : Float) -> Unit = "(a, i, v) => { a[i] = v; }"
 
 ///|
-/// Bins packed into 64-bit words would be BigInts in JS: keep two-byte bins.
-let narrow_bins : Bool = false
+/// One-byte bins are packed four to an Int32: 64-bit words would be
+/// BigInts in JS.
+let narrow_bins : Bool = true
+
+///|
+type Words = I32s
+
+///|
+let word_bins : Int32 = 4
+
+///|
+fn words_make(n : Int32) -> Words {
+  i32s_make(n)
+}
+
+///|
+/// The byte of a word at bit `shift`.
+fn word_byte(x : Int32, shift : Int32) -> Int32 {
+  (x >> shift) & 255
+}
+
+///|
+/// A word with byte `b` set at bit `shift` (which was zero).
+fn word_put(x : Int32, b : Byte, shift : Int32) -> Int32 {
+  x | (b.to_int() << shift)
+}
 
 ///|
 fn qarr_make(n : Int32) -> QArr {
@@ -195,10 +219,41 @@ fn Grower::histogram(
   level : Int32,
   depth : Int32,
 ) -> Hist {
-  guard !self.narrow else { abort("one-byte bins are not used in JS") }
-  // the one-byte slot bases are only read by the other backends
-  ignore(self.wbase)
   let rows = self.rows
+  if self.narrow {
+    // padding bytes of a last, partial word count into slots past nbins
+    let hist = pooled_hist(depth, (self.nbins + word_bins) * 2)
+    let (cb, qa) = if level > 0 {
+      (self.cbins[level - 1], self.cq[level - 1])
+    } else {
+      (self.bins8, self.gq)
+    }
+    let wb = self.wbase
+    let words = self.words
+    for i in lo..<hi {
+      let r = rows.unsafe_get(i)
+      let g = qa.unsafe_get(r * 2)
+      let h = qa.unsafe_get(r * 2 + 1)
+      let base = r * words
+      for w in 0..<words {
+        let x = cb.unsafe_get(base + w)
+        let o = w * 4
+        let s0 = ((x & 255) + wb.unsafe_get(o)) * 2
+        let s1 = (((x >> 8) & 255) + wb.unsafe_get(o + 1)) * 2
+        let s2 = (((x >> 16) & 255) + wb.unsafe_get(o + 2)) * 2
+        let s3 = (((x >> 24) & 255) + wb.unsafe_get(o + 3)) * 2
+        hist.unsafe_set(s0, hist.unsafe_get(s0) + g)
+        hist.unsafe_set(s0 + 1, hist.unsafe_get(s0 + 1) + h)
+        hist.unsafe_set(s1, hist.unsafe_get(s1) + g)
+        hist.unsafe_set(s1 + 1, hist.unsafe_get(s1 + 1) + h)
+        hist.unsafe_set(s2, hist.unsafe_get(s2) + g)
+        hist.unsafe_set(s2 + 1, hist.unsafe_get(s2 + 1) + h)
+        hist.unsafe_set(s3, hist.unsafe_get(s3) + g)
+        hist.unsafe_set(s3 + 1, hist.unsafe_get(s3 + 1) + h)
+      }
+    }
+    return hist
+  }
   let hist = pooled_hist(depth, self.nbins * 2)
   let cols = self.data.cols
   let bins = if level > 0 { self.cbins16[level - 1] } else { self.data.bins }

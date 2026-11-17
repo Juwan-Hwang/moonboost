@@ -262,14 +262,15 @@ priv struct Grower {
   // copied bins take one byte, slot - cbase[feature], when every feature's
   // slots in use span at most 256 (narrow); otherwise two, the slot itself
   narrow : Bool
-  // when narrow, the original bins in the same one-byte form, eight to a
-  // word: feature f of row r is byte f % 8 of bins8[r * words + f / 8], so
+  // when narrow, the original bins in the same one-byte form, word_bins
+  // to a word: feature f of row r is byte f % word_bins of
+  // bins8[r * words + f / word_bins], so
   // a row's bins load and copy a word at a time
-  bins8 : FixedArray[UInt64]
+  bins8 : Words
   words : Int32
   // and column by column: by8[f * rows + r]
   by8 : FixedArray[Byte]
-  cbins : FixedArray[FixedArray[UInt64]]
+  cbins : FixedArray[Words]
   cbase : FixedArray[Int32]
   // cbase per byte of the row words; the padding bytes of a last, partial
   // word count into spare slots past nbins
@@ -487,11 +488,11 @@ fn Grower::partition(
       // the feature's byte of position r is in word r * words + column
       let cb = self.cbins[level - 1]
       let words = self.words
-      let column = s.feature / 8
-      let shift = s.feature % 8 * 8
+      let column = s.feature / word_bins
+      let shift = s.feature % word_bins * 8
       for i in lo..<hi {
         let r = rows.unsafe_get(i)
-        let byte = ((cb.unsafe_get(r * words + column) >> shift) & 255UL).to_int()
+        let byte = word_byte(cb.unsafe_get(r * words + column), shift)
         let left = go.unsafe_get(byte)
         dst.unsafe_set(a, r)
         dst.unsafe_set(b, r)
@@ -922,9 +923,9 @@ fn train_json(
   }
   let copies = if narrow { 0 } else { n * data.cols }
   let cols = data.cols
-  let words = (cols + 7) / 8
+  let words = (cols + word_bins - 1) / word_bins
   let wn = if narrow { n * words } else { 0 }
-  let bins8 = FixedArray::make(wn, 0UL)
+  let bins8 = words_make(wn)
   let by8 = FixedArray::make(n * cols - copies, b'\x00')
   let by_col = binned.by_col
   if narrow {
@@ -934,10 +935,10 @@ fn train_json(
       let adj = if binned.missing[f] { 0 } else { 1 }
       for r in 0..<n {
         let b = (by_col.unsafe_get(f * n + r).to_int() - adj).to_byte()
-        let at = r * words + f / 8
+        let at = r * words + f / word_bins
         bins8.unsafe_set(
           at,
-          bins8.unsafe_get(at) | (b.to_int().to_uint64() << (f % 8 * 8)),
+          word_put(bins8.unsafe_get(at), b, f % word_bins * 8),
         )
         by8.unsafe_set(f * n + r, b)
       }
@@ -967,13 +968,13 @@ fn train_json(
     bins8,
     words,
     by8,
-    cbins: FixedArray::makei(1, fn(_) { FixedArray::make(wn, 0UL) }),
+    cbins: FixedArray::makei(1, fn(_) { words_make(wn) }),
     cbase,
-    wbase: FixedArray::makei(words * 8, fn(i) {
+    wbase: FixedArray::makei(words * word_bins, fn(i) {
       if i < cols {
         cbase[i]
       } else {
-        hist_start[cols] + i % 8
+        hist_start[cols] + i % word_bins
       }
     }),
     cbins16: FixedArray::makei(1, fn(_) { u16s_make(copies) }),

@@ -39,6 +39,30 @@ fn f32s_make(n : Int32) -> F32s {
 let narrow_bins : Bool = true
 
 ///|
+/// One-byte bins, eight to a 64-bit word.
+type Words = FixedArray[UInt64]
+
+///|
+let word_bins : Int32 = 8
+
+///|
+fn words_make(n : Int32) -> Words {
+  FixedArray::make(n, 0UL)
+}
+
+///|
+/// The byte of a word at bit `shift`.
+fn word_byte(x : UInt64, shift : Int32) -> Int32 {
+  ((x >> shift) & 255UL).to_int()
+}
+
+///|
+/// A word with byte `b` set at bit `shift` (which was zero).
+fn word_put(x : UInt64, b : Byte, shift : Int32) -> UInt64 {
+  x | (b.to_int().to_uint64() << shift)
+}
+
+///|
 fn qarr_make(n : Int32) -> QArr {
   FixedArray::make(n, 0L)
 }

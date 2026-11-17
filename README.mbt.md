@@ -98,8 +98,11 @@ label-encoded, which differs from GBM-perf's own setup), two runs each:
 moonboost takes about half the time of XGBoost and about 30% less
 than LightGBM here (`bench/gbmperf_compare.py`; all three in the same session).
 
-The same training runs in the browser through the ES module's `train`
-(the 3-class case takes 1.6 s in Node).
+The same training runs in the browser through the ES module's `train`, and
+builds the same model bit for bit: the JS build keeps the quantised sums in
+Doubles (Int64 would be a BigInt there) and its buffers in typed arrays. On
+the airline data above it takes about 34 s in Node 22 (6.0 s native, same
+session).
 
 ## Correctness
 

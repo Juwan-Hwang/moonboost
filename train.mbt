@@ -719,7 +719,7 @@ fn Grower::grow(
         } else {
           (mid, hi)
         }
-        let small = self.histogram(small_lo, small_hi, level)
+        let small = self.histogram(small_lo, small_hi, level, depth + 1)
         // the parent's histogram becomes the larger child's
         hist_sub(hist, small)
         if small_lo == lo {
@@ -1071,7 +1071,7 @@ fn train_json(
       }
       let tree = GrowTree::new()
       let root = tree.add(-1, gr.weight(gsum, hsum), hsum)
-      let hist = gr.histogram(0, n, 0)
+      let hist = gr.histogram(0, n, 0, 0)
       // every row is in exactly one slot of feature 0, so those slots sum
       // to the quantised totals
       let mut qg = 0.0

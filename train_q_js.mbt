@@ -160,18 +160,46 @@ fn train_exp(x : Double) -> Double {
 }
 
 ///|
+/// One histogram buffer per tree depth. A node at depth d builds its
+/// smaller child's histogram in buffer d + 1 and hands its own to the
+/// larger child; the histograms alive at any time (the current node's and
+/// those waiting for the right siblings along its path) belong to depths up
+/// to d, so buffer d + 1 is free. Reusing them spares V8 a large
+/// allocation per node.
+let hist_pool : Array[F64] = []
+
+///|
+extern "js" fn F64::zero(self : F64) -> Unit = "(a) => { a.fill(0); }"
+
+///|
+fn pooled_hist(depth : Int32, len : Int32) -> F64 {
+  while hist_pool.length() <= depth {
+    hist_pool.push(F64::new(len))
+  }
+  let h = hist_pool[depth]
+  if h.length() != len {
+    let fresh = F64::new(len)
+    hist_pool[depth] = fresh
+    return fresh
+  }
+  h.zero()
+  h
+}
+
+///|
 /// Gradient and hessian sums per bin for rows[lo:hi], from two-byte bins.
 fn Grower::histogram(
   self : Grower,
   lo : Int32,
   hi : Int32,
   level : Int32,
+  depth : Int32,
 ) -> Hist {
   guard !self.narrow else { abort("one-byte bins are not used in JS") }
   // the one-byte slot bases are only read by the other backends
   ignore(self.wbase)
   let rows = self.rows
-  let hist = F64::new(self.nbins * 2)
+  let hist = pooled_hist(depth, self.nbins * 2)
   let cols = self.data.cols
   let bins = if level > 0 { self.cbins16[level - 1] } else { self.data.bins }
   let qa = if level > 0 { self.cq[level - 1] } else { self.gq }

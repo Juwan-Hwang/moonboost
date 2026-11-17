@@ -123,13 +123,16 @@ fn train_exp(x : Double) -> Double {
 }
 
 ///|
-/// Gradient and hessian sums per bin for rows[lo:hi].
+/// Gradient and hessian sums per bin for rows[lo:hi], for a node at
+/// `depth` (unused here: each histogram is a fresh allocation).
 fn Grower::histogram(
   self : Grower,
   lo : Int32,
   hi : Int32,
   level : Int32,
+  depth : Int32,
 ) -> Hist {
+  ignore(depth)
   let rows = self.rows
   if self.narrow {
     let hist = FixedArray::make(self.nbins + 8, 0L)

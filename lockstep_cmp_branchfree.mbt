@@ -13,3 +13,19 @@ fn advance(t : Int32, key : Int32, step : Int32) -> Int32 {
 /// Whether batches walk each tree eight rows at a time with node ids in
 /// locals (see `Lockstep::accumulate_rows8`).
 const ROWS8 : Bool = false
+
+///|
+/// `step` when cut i is `<= v`, compared on the order keys without a
+/// branch.
+fn cut_step(
+  fv : FixedArray[Float],
+  fc : FixedArray[Int32],
+  i : Int32,
+  v : Float,
+  x : Int32,
+  step : Int32,
+) -> Int32 {
+  ignore(fv)
+  ignore(v)
+  advance(fc.unsafe_get(i), x, step)
+}

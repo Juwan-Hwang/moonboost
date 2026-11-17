@@ -129,27 +129,32 @@ let block : Int32 = 8192
 
 ///|
 /// Bins of feature f for rows lo..hi into by_col (feature-major, `rows`
-/// rows), against the feature's sorted cuts fc.
+/// rows), against the feature's sorted cuts fv and their order keys fc.
 fn bin_block(
   data : FixedArray[Float],
   cols : Int32,
   f : Int32,
-  fc : FixedArray[Float],
+  fv : FixedArray[Float],
+  fc : FixedArray[Int32],
   by_col : U16s,
   rows : Int32,
   lo : Int32,
   hi : Int32,
 ) -> Unit {
   // the bin of a value is one more than the number of cuts <= it, found
-  // by steps that add a 0/1 multiple rather than branch; four rows search
-  // side by side, as each search is one long dependency chain. A missing
-  // value (no cut is <= NaN) keeps bin 0.
+  // by steps that add without a branch (`cut_step`); four
+  // rows search side by side, as each search is one long dependency chain.
+  // A missing value keeps bin 0.
   let mut r = lo
   while r + 4 <= hi {
     let v0 = data[r * cols + f]
+    let x0 = order_key(v0)
     let v1 = data[(r + 1) * cols + f]
+    let x1 = order_key(v1)
     let v2 = data[(r + 2) * cols + f]
+    let x2 = order_key(v2)
     let v3 = data[(r + 3) * cols + f]
+    let x3 = order_key(v3)
     let mut k0 = 0
     let mut k1 = 0
     let mut k2 = 0
@@ -158,10 +163,10 @@ fn bin_block(
     while len > 0 {
       let half = len / 2
       let step = len - half
-      k0 += (fc.unsafe_get(k0 + half) <= v0).to_int() * step
-      k1 += (fc.unsafe_get(k1 + half) <= v1).to_int() * step
-      k2 += (fc.unsafe_get(k2 + half) <= v2).to_int() * step
-      k3 += (fc.unsafe_get(k3 + half) <= v3).to_int() * step
+      k0 += cut_step(fv, fc, k0 + half, v0, x0, step)
+      k1 += cut_step(fv, fc, k1 + half, v1, x1, step)
+      k2 += cut_step(fv, fc, k2 + half, v2, x2, step)
+      k3 += cut_step(fv, fc, k3 + half, v3, x3, step)
       len = half
     }
     let at = f * rows + r
@@ -173,11 +178,12 @@ fn bin_block(
   }
   while r < hi {
     let v = data[r * cols + f]
+    let x = order_key(v)
     let mut k = 0
     let mut len = fc.length()
     while len > 0 {
       let half = len / 2
-      k += (fc.unsafe_get(k + half) <= v).to_int() * (len - half)
+      k += cut_step(fv, fc, k + half, v, x, len - half)
       len = half
     }
     by_col.unsafe_set(f * rows + r, bin_code(v, k))
@@ -227,6 +233,14 @@ fn wide_block(
       (by_col.unsafe_get(f * n + r).to_int() + start).to_uint16(),
     )
   }
+}
+
+///|
+/// An integer that orders like the float (with -0 equal to +0); the order
+/// of NaN is not used.
+fn order_key(x : Float) -> Int32 {
+  let b = (x + 0.0).reinterpret_as_int()
+  b ^ ((b >> 31) & 0x7FFFFFFF)
 }
 
 ///|
@@ -285,10 +299,11 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
     cut_start[f + 1] = cuts.length()
     let lo = base
     let hi = cuts.length()
-    let fc = FixedArray::makei(hi - lo, fn(i) { cuts[lo + i] })
+    let fv = FixedArray::makei(hi - lo, fn(i) { cuts[lo + i] })
+    let fc = FixedArray::makei(hi - lo, fn(i) { order_key(fv[i]) })
     let data = m.data
     for lo = 0; lo < rows; lo = lo + block {
-      bin_block(data, cols, f, fc, by_col, rows, lo, block_end(lo, rows))
+      bin_block(data, cols, f, fv, fc, by_col, rows, lo, block_end(lo, rows))
     }
     for r in 0..<rows {
       if data[r * cols + f].is_nan() {

@@ -262,12 +262,18 @@ priv struct Grower {
   // copied bins take one byte, slot - cbase[feature], when every feature's
   // slots in use span at most 256 (narrow); otherwise two, the slot itself
   narrow : Bool
-  // when narrow, the original bins in the same one-byte form
-  bins8 : FixedArray[Byte]
+  // when narrow, the original bins in the same one-byte form, eight to a
+  // word: feature f of row r is byte f % 8 of bins8[r * words + f / 8], so
+  // a row's bins load and copy a word at a time
+  bins8 : FixedArray[UInt64]
+  words : Int32
   // and column by column: by8[f * rows + r]
   by8 : FixedArray[Byte]
-  cbins : FixedArray[FixedArray[Byte]]
+  cbins : FixedArray[FixedArray[UInt64]]
   cbase : FixedArray[Int32]
+  // cbase per byte of the row words; the padding bytes of a last, partial
+  // word count into spare slots past nbins
+  wbase : FixedArray[Int32]
   cbins16 : FixedArray[FixedArray[UInt16]]
   cq : FixedArray[FixedArray[Int64]]
   cgh : FixedArray[FixedArray[Float]]
@@ -360,43 +366,45 @@ fn Grower::histogram(
   hi : Int32,
   level : Int32,
 ) -> FixedArray[Int64] {
-  let hist = FixedArray::make(self.nbins, 0L)
-  let cols = self.data.cols
   let rows = self.rows
   if self.narrow {
+    let hist = FixedArray::make(self.nbins + 8, 0L)
     let (cb, cq) = if level > 0 {
       (self.cbins[level - 1], self.cq[level - 1])
     } else {
       (self.bins8, self.gq)
     }
-    let base_of = self.cbase
+    let wb = self.wbase
+    let words = self.words
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
       let q = cq.unsafe_get(r)
-      let base = r * cols
-      let mut f = 0
-      while f + 4 <= cols {
-        let s0 = cb.unsafe_get(base + f).to_int() + base_of.unsafe_get(f)
-        let s1 = cb.unsafe_get(base + f + 1).to_int() +
-          base_of.unsafe_get(f + 1)
-        let s2 = cb.unsafe_get(base + f + 2).to_int() +
-          base_of.unsafe_get(f + 2)
-        let s3 = cb.unsafe_get(base + f + 3).to_int() +
-          base_of.unsafe_get(f + 3)
+      let base = r * words
+      for w in 0..<words {
+        let x = cb.unsafe_get(base + w)
+        let o = w * 8
+        let s0 = (x & 255UL).to_int() + wb.unsafe_get(o)
+        let s1 = ((x >> 8) & 255UL).to_int() + wb.unsafe_get(o + 1)
+        let s2 = ((x >> 16) & 255UL).to_int() + wb.unsafe_get(o + 2)
+        let s3 = ((x >> 24) & 255UL).to_int() + wb.unsafe_get(o + 3)
         hist.unsafe_set(s0, hist.unsafe_get(s0) + q)
         hist.unsafe_set(s1, hist.unsafe_get(s1) + q)
         hist.unsafe_set(s2, hist.unsafe_get(s2) + q)
         hist.unsafe_set(s3, hist.unsafe_get(s3) + q)
-        f += 4
-      }
-      while f < cols {
-        let slot = cb.unsafe_get(base + f).to_int() + base_of.unsafe_get(f)
-        hist.unsafe_set(slot, hist.unsafe_get(slot) + q)
-        f += 1
+        let s4 = ((x >> 32) & 255UL).to_int() + wb.unsafe_get(o + 4)
+        let s5 = ((x >> 40) & 255UL).to_int() + wb.unsafe_get(o + 5)
+        let s6 = ((x >> 48) & 255UL).to_int() + wb.unsafe_get(o + 6)
+        let s7 = (x >> 56).to_int() + wb.unsafe_get(o + 7)
+        hist.unsafe_set(s4, hist.unsafe_get(s4) + q)
+        hist.unsafe_set(s5, hist.unsafe_get(s5) + q)
+        hist.unsafe_set(s6, hist.unsafe_get(s6) + q)
+        hist.unsafe_set(s7, hist.unsafe_get(s7) + q)
       }
     }
     return hist
   }
+  let hist = FixedArray::make(self.nbins, 0L)
+  let cols = self.data.cols
   let bins = if level > 0 { self.cbins16[level - 1] } else { self.data.bins }
   let gq = if level > 0 { self.cq[level - 1] } else { self.gq }
   // indices are in range by construction: rows hold row numbers and bins
@@ -450,12 +458,13 @@ fn Grower::compact(
   if self.narrow {
     let tb = self.cbins[0]
     let b8 = self.bins8
+    let words = self.words
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
-      let src = r * cols
-      let dst = i * cols
-      for f in 0..<cols {
-        tb.unsafe_set(dst + f, b8.unsafe_get(src + f))
+      let src = r * words
+      let dst = i * words
+      for w in 0..<words {
+        tb.unsafe_set(dst + w, b8.unsafe_get(src + w))
       }
       tq.unsafe_set(i, q.unsafe_get(r))
       tg.unsafe_set(i * 2, gh.unsafe_get(r * 2))
@@ -591,20 +600,33 @@ fn Grower::partition(
   // downwards from hi - 1; each row is written at both cursors and only
   // one advances, so every slot ends with the row last meant for it
   if self.narrow {
-    // the feature's bin of position r is cb[r * stride + column] + add
-    let (cb, stride, column) = if level > 0 {
-      (self.cbins[level - 1], self.data.cols, s.feature)
-    } else {
-      (self.by8, 1, s.feature * self.leaf_at.length())
-    }
     let go = self.left_table(s)
-    for i in lo..<hi {
-      let r = rows.unsafe_get(i)
-      let left = go.unsafe_get(cb.unsafe_get(r * stride + column).to_int())
-      dst.unsafe_set(a, r)
-      dst.unsafe_set(b, r)
-      a += left
-      b -= 1 - left
+    if level > 0 {
+      // the feature's byte of position r is in word r * words + column
+      let cb = self.cbins[level - 1]
+      let words = self.words
+      let column = s.feature / 8
+      let shift = s.feature % 8 * 8
+      for i in lo..<hi {
+        let r = rows.unsafe_get(i)
+        let byte = ((cb.unsafe_get(r * words + column) >> shift) & 255UL).to_int()
+        let left = go.unsafe_get(byte)
+        dst.unsafe_set(a, r)
+        dst.unsafe_set(b, r)
+        a += left
+        b -= 1 - left
+      }
+    } else {
+      let cb = self.by8
+      let column = s.feature * self.leaf_at.length()
+      for i in lo..<hi {
+        let r = rows.unsafe_get(i)
+        let left = go.unsafe_get(cb.unsafe_get(r + column).to_int())
+        dst.unsafe_set(a, r)
+        dst.unsafe_set(b, r)
+        a += left
+        b -= 1 - left
+      }
     }
   } else {
     // the feature's bin of row r is bins[r * stride + column] - sub
@@ -669,16 +691,17 @@ fn Grower::partition_copy(
     let by8 = self.by8
     let b8 = self.bins8
     let tb = self.cbins[0]
+    let words = self.words
     let column = s.feature * n
     let go = self.left_table(s)
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
       let left = go.unsafe_get(by8.unsafe_get(r + column).to_int())
       let p = b + (a - b) * left
-      let src = r * cols
-      let at = p * cols
-      for f in 0..<cols {
-        tb.unsafe_set(at + f, b8.unsafe_get(src + f))
+      let src = r * words
+      let at = p * words
+      for w in 0..<words {
+        tb.unsafe_set(at + w, b8.unsafe_get(src + w))
       }
       tq.unsafe_set(p, q.unsafe_get(r))
       tg.unsafe_set(p * 2, gh.unsafe_get(r * 2))
@@ -1015,7 +1038,9 @@ fn train_json(
   }
   let copies = if narrow { 0 } else { n * data.cols }
   let cols = data.cols
-  let bins8 = FixedArray::make(n * cols - copies, b'\x00')
+  let words = (cols + 7) / 8
+  let wn = if narrow { n * words } else { 0 }
+  let bins8 = FixedArray::make(wn, 0UL)
   let by8 = FixedArray::make(n * cols - copies, b'\x00')
   let by_col = binned.by_col
   if narrow {
@@ -1025,7 +1050,11 @@ fn train_json(
       let adj = if binned.missing[f] { 0 } else { 1 }
       for r in 0..<n {
         let b = (by_col.unsafe_get(f * n + r).to_int() - adj).to_byte()
-        bins8.unsafe_set(r * cols + f, b)
+        let at = r * words + f / 8
+        bins8.unsafe_set(
+          at,
+          bins8.unsafe_get(at) | (b.to_int().to_uint64() << (f % 8 * 8)),
+        )
         by8.unsafe_set(f * n + r, b)
       }
     }
@@ -1049,11 +1078,17 @@ fn train_json(
     compact_at: [2],
     narrow,
     bins8,
+    words,
     by8,
-    cbins: FixedArray::makei(1, fn(_) {
-      FixedArray::make(n * data.cols - copies, (0 : Byte))
-    }),
+    cbins: FixedArray::makei(1, fn(_) { FixedArray::make(wn, 0UL) }),
     cbase,
+    wbase: FixedArray::makei(words * 8, fn(i) {
+      if i < cols {
+        cbase[i]
+      } else {
+        hist_start[cols] + i % 8
+      }
+    }),
     cbins16: FixedArray::makei(1, fn(_) { FixedArray::make(copies, 0) }),
     cq: FixedArray::makei(1, fn(_) { FixedArray::make(n, 0L) }),
     cgh: FixedArray::makei(1, fn(_) { FixedArray::make(n * 2, (0.0 : Float)) }),

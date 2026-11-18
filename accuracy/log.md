@@ -24,3 +24,6 @@
 | M5 | 多数据集（OpenML 10 个二分类，80/20，100 轮 lr0.1，每库 4 组配置按验证集选） | 胜：credit 0.832/0.817/0.790、kdd_upselling 0.855/0.848/0.840、higgs 0.799/0.797/0.798；平：adult、bank、phoneme、miniboone、electricity；负：amazon 0.851/0.850/**0.867**、click 0.690/0.694/0.694 | 高基数类别（amazon）默认 min_data_per_group=100 太严 |
 | M6 | amazon：min_data_per_group 1 / depth 5 / lambda 5 | 0.8134→0.8614→0.8683 | 与 XGBoost 0.8673 持平；airline 上 mdpg=1 反而降到 0.7774（100 时 0.7855），参数依数据而定 |
 | M7 | 叶堆（O(log L) 取最大增益叶） | airline 2048 叶模型不变（0.7855），用时下降 | 保留 |
+| N2 | split_penalty：增益减 c·ln(候选切分数)（多重比较校正，自创） | adult/bank/click 升 0.003–0.013；amazon/credit/electricity/phoneme 降 0.007–0.03；higgs 平 | 否决：非普遍收益，已回退 |
+| M8 | 等预算调参 v2（三库共用同一组随机抽样映射到各自参数名，24 组） | 测试 AUC（mb/lgb/xgb）：adult .9265/.9253/.9259，amazon .8743/.8624/.8769，bank .9358/.9372/.9329，click .6940/.6929/.6968，credit .8479/.8449/.8449，electricity .9861/.9852/.9874，phoneme .9578/.9559/.9631，higgs .8005/.8019/.8021 | 小数据集测试集仅 1k–20k 行，AUC 标准误 0.003–0.005，差异多在噪声内；需多次重复划分才能下结论 |
+| M9 | 同配置对照（用 XGBoost 选中的配置跑 moonboost） | phoneme .9613 vs .9631；higgs .8012 vs .8021；electricity .9865 vs .9870 | 纯数值数据上与 XGBoost 同配置基本持平（略低 0.001–0.002，噪声级） |

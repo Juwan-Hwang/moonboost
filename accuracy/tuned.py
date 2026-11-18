@@ -4,24 +4,28 @@ import numpy as np, subprocess, os, sys, time, json
 import lightgbm as lgb, xgboost as xgb
 from sklearn.metrics import roc_auc_score
 core=os.environ.get('CORE','0'); os.sched_setaffinity(0,{int(core)})
-TRIALS=int(os.environ.get('TRIALS','16'))
+TRIALS=int(os.environ.get('TRIALS','24'))
 B=os.path.expanduser('~/mb/moonboost/_build/native/release/build/cmd/main/main.exe')
 def logu(r,a,b): return float(np.exp(r.uniform(np.log(a),np.log(b))))
-def mb_cfg(r):
-  a=[]
-  if r.rand()<0.5: a+=['--depth',str(r.randint(3,11))]
-  else: a+=['--grow-policy','lossguide','--depth','0','--max-leaves',str(int(logu(r,15,4096)))]
-  a+=['--lambda','%.4g'%logu(r,0.1,30),'--min-child-weight','%.4g'%logu(r,0.1,30),'--max-cat-to-onehot',str(r.choice([4,32])),
-      '--min-data-per-group',str(r.choice([1,10,100])),'--cat-l2',str(r.choice([1,10])),'--cat-smooth',str(r.choice([1,10,30]))]
-  return a
-def lgb_cfg(r):
-  return {'num_leaves':int(logu(r,15,4096)),'max_depth':int(r.choice([-1,-1,4,6,8,10])),'lambda_l2':logu(r,0.1,30),'min_sum_hessian_in_leaf':logu(r,0.1,30),
-          'min_data_in_leaf':int(r.choice([1,20,100])),'max_cat_to_onehot':int(r.choice([4,32])),'min_data_per_group':int(r.choice([1,10,100])),'cat_l2':float(r.choice([1,10])),'cat_smooth':float(r.choice([1,10,30]))}
-def xgb_cfg(r):
-  c={'lambda':logu(r,0.1,30),'min_child_weight':logu(r,0.1,30),'max_cat_to_onehot':int(r.choice([4,32])),'max_cat_threshold':int(r.choice([16,64,256]))}
-  if r.rand()<0.5: c['max_depth']=int(r.randint(3,11))
-  else: c.update(grow_policy='lossguide',max_depth=0,max_leaves=int(logu(r,15,4096)))
+def shared(r):
+  # one draw, mapped to each library's names, so all three see the same settings
+  c={'lossguide':r.rand()<0.5,'depth':int(r.randint(3,11)),'leaves':int(logu(r,15,4096)),'lam':logu(r,0.1,30),'mcw':logu(r,0.1,30),
+     'onehot':int(r.choice([4,32])),'mdpg':int(r.choice([1,10,100])),'cat_l2':float(r.choice([1,10])),'cat_smooth':float(r.choice([1,10,30])),
+     'mct':int(r.choice([16,64,256])),'min_data':int(r.choice([1,20,100]))}
   return c
+def mb_cfg(c):
+  a=['--grow-policy','lossguide','--depth','0','--max-leaves',str(c['leaves'])] if c['lossguide'] else ['--depth',str(c['depth'])]
+  return a+['--lambda','%.4g'%c['lam'],'--min-child-weight','%.4g'%c['mcw'],'--max-cat-to-onehot',str(c['onehot']),'--min-data-per-group',str(c['mdpg']),
+            '--cat-l2',str(c['cat_l2']),'--cat-smooth',str(c['cat_smooth']),'--max-cat-threshold',str(c['mct'])]
+def lgb_cfg(c):
+  d={'num_leaves':c['leaves'],'max_depth':-1} if c['lossguide'] else {'num_leaves':min(2**c['depth'],131072),'max_depth':c['depth']}
+  d.update(lambda_l2=c['lam'],min_sum_hessian_in_leaf=c['mcw'],min_data_in_leaf=c['min_data'],max_cat_to_onehot=c['onehot'],min_data_per_group=c['mdpg'],
+           cat_l2=c['cat_l2'],cat_smooth=c['cat_smooth'],max_cat_threshold=c['mct'])
+  return d
+def xgb_cfg(c):
+  d={'grow_policy':'lossguide','max_depth':0,'max_leaves':c['leaves']} if c['lossguide'] else {'max_depth':c['depth']}
+  d.update({'lambda':c['lam'],'min_child_weight':c['mcw'],'max_cat_to_onehot':c['onehot'],'max_cat_threshold':c['mct']})
+  return d
 def run(lib,cfg,Xf,yf,Xs,cats,W):
   if lib=='moonboost':
     extra=['--categorical',','.join(map(str,cats))] if len(cats) else []
@@ -46,7 +50,7 @@ for n in sys.argv[1:]:
   for lib in libs:
     r=np.random.RandomState(42); best=None; t=time.perf_counter(); fails=0
     for i in range(TRIALS):
-      cfg=CFG[lib](r)
+      cfg=CFG[lib](shared(r))
       try: pv,pt=run(lib,cfg,Xtr[fi],ytr[fi],[Xtr[vi],Xte],cats,W)
       except Exception as e: fails+=1; continue
       v=roc_auc_score(ytr[vi],pv)

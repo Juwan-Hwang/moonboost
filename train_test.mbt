@@ -222,3 +222,21 @@ test "row and feature sampling: seeded, and every tree still loads" {
   let model = @moonboost.Model::from_xgboost_json(a)
   assert_eq(model.predict_batch(x).length(), 3000)
 }
+
+///|
+test "min_data_in_leaf bounds the rows of every child" {
+  // squared error: every row's hessian is 1, so the estimate is exact
+  let (x, y) = toy(3000)
+  let params = {
+    ..@moonboost.TrainParams::default(),
+    num_round: 4,
+    max_depth: 4,
+    min_data_in_leaf: 1400.0,
+  }
+  let json = @moonboost.train_xgboost_json(x, y, params~)
+  // only a near-even root split leaves both children 1400 rows
+  for n in ["5", "7", "9", "11", "13", "15"] {
+    assert_false(json.contains("\"num_nodes\":\"\{n}\""))
+  }
+  assert_true(json.contains("\"num_nodes\":\"3\""))
+}

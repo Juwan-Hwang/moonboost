@@ -51,6 +51,9 @@ pub(all) struct TrainParams {
   colsample_bynode : Double
   /// seed of the row and feature sampling
   seed : Int32
+  /// fewest rows a child may have, counted as LightGBM does from its share
+  /// of the node's hessian
+  min_data_in_leaf : Double
 }
 
 ///|
@@ -79,6 +82,7 @@ pub fn TrainParams::default() -> TrainParams {
     colsample_bytree: 1.0,
     colsample_bynode: 1.0,
     seed: 0,
+    min_data_in_leaf: 0.0,
   }
 }
 
@@ -691,6 +695,23 @@ fn Grower::set_scales(
 }
 
 ///|
+/// The least hessian a child of a node (hessian h, count rows) may have:
+/// min_child_weight, or min_data_in_leaf rows at the node's mean hessian.
+fn Grower::min_hessian(self : Grower, h : Double, count : Int32) -> Double {
+  let m = self.p.min_child_weight
+  if self.p.min_data_in_leaf > 0.0 && count > 0 {
+    let d = self.p.min_data_in_leaf * h / count.to_double()
+    if d > m {
+      d
+    } else {
+      m
+    }
+  } else {
+    m
+  }
+}
+
+///|
 fn Grower::weight(self : Grower, g : Double, h : Double) -> Double {
   -g / (h + self.p.lambda)
 }
@@ -765,7 +786,7 @@ fn Grower::best_split(
   count : Int32,
 ) -> Split? {
   let parent = self.score(g, h)
-  let mcw = self.p.min_child_weight
+  let mcw = self.min_hessian(h, count)
   let mut best : Split? = None
   let mut best_gain = self.p.gamma
   let sampled = self.p.colsample_bytree < 1.0 || self.p.colsample_bynode < 1.0
@@ -875,7 +896,7 @@ fn Grower::cat_split(
   parent : Double,
   best_gain : Double,
 ) -> Split? {
-  let mcw = self.p.min_child_weight
+  let mcw = self.min_hessian(h, count)
   let ids : Array[Int32] = []
   let cg : Array[Double] = []
   let ch : Array[Double] = []

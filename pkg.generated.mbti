@@ -126,6 +126,7 @@ pub(all) struct TrainParams {
   colsample_bytree : Double
   colsample_bynode : Double
   seed : Int32
+  min_data_in_leaf : Double
 }
 pub fn TrainParams::default() -> Self
 

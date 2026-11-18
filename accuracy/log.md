@@ -17,3 +17,7 @@
 | N1 | 原型：类别排序用偶数行、增益用奇数行（honest 交叉拟合） | oh32 1024 叶 0.7711→0.7738；oh4 0.7640→0.7711；oh32 2048 叶 0.7803→0.7819 | 一致正向，待移植 |
 | P9 | 原型 leaf_newton（叶值多步 Newton） | 0.7635→0.7623；2048 叶 0.7709→0.7693 | 否决 |
 | M1 | **moonboost 实装**：类别切分（one-vs-rest ≤ max_cat_to_onehot，否则按 g/(h+10) 排序前后缀，cat_l2=10，≥100 行）+ lossguide 按叶生长 | depthwise depth10 无类别 0.7520 / 有类别 0.7629；lossguide 1024 叶 0.7785；**2048 叶 0.7855** | 超过 LightGBM 最佳 0.7781；XGBoost 加载同一 JSON 预测逐位一致 |
+| M2 | moonboost lossguide 叶数 3072 / 4096（oh32） | 0.7873 / 0.7878 | 更大树继续涨 |
+| M3 | moonboost oh64（2048 叶） / min_child_weight 5 | 0.7858 / 0.7833 | oh64≈oh32；mcw5 变差 |
+| M4 | moonboost cat_crossfit（N1 移植，2048/4096 叶） | 0.7853 / 0.7866 vs 0.7855 / 0.7878 | 否决：原型收益未复现，且慢 60% |
+| P10 | LightGBM oh32 3072 / 4096 叶；同 moonboost 正则（λ=1、min_sum_hessian=1、min_data=1）2048/4096 | 0.7825 / 0.7823；0.7780 / 0.7803 | LightGBM 最佳 0.7825，moonboost 4096 叶 0.7878 领先 0.005 |

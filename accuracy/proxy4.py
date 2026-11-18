@@ -27,3 +27,8 @@ for e in sys.argv[1:]:
     run('onehot32 + mct256',max_cat_to_onehot=32,max_cat_threshold=256)
     run('onehot32 + leaves2048',max_cat_to_onehot=32,num_leaves=2048)
     run('onehot32 nohour?',max_cat_to_onehot=32,num_leaves=1024)
+  if e=='lgbbig':
+    run('oh32 leaves4096',max_cat_to_onehot=32,num_leaves=4096)
+    run('oh32 leaves3072',max_cat_to_onehot=32,num_leaves=3072)
+  if e=='lgbmatch':
+    for nl in [2048,4096]: run(f'oh32 leaves{nl} lambda1 mshl1 mdl0',max_cat_to_onehot=32,num_leaves=nl,lambda_l2=1,min_sum_hessian_in_leaf=1,min_data_in_leaf=1)

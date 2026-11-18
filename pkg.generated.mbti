@@ -119,6 +119,9 @@ pub(all) struct TrainParams {
   categorical : Array[Int32]
   max_cat_to_onehot : Int32
   max_cat_threshold : Int32
+  cat_smooth : Double
+  cat_l2 : Double
+  min_data_per_group : Double
 }
 pub fn TrainParams::default() -> Self
 

@@ -37,6 +37,12 @@ pub(all) struct TrainParams {
   max_cat_to_onehot : Int32
   /// most categories a partition split sends to the smaller side
   max_cat_threshold : Int32
+  /// partition splits order categories by g / (h + cat_smooth), leave out
+  /// categories with fewer than min_data_per_group rows (estimated from
+  /// the hessian) and add cat_l2 to lambda (LightGBM's names)
+  cat_smooth : Double
+  cat_l2 : Double
+  min_data_per_group : Double
 }
 
 ///|
@@ -58,6 +64,9 @@ pub fn TrainParams::default() -> TrainParams {
     categorical: [],
     max_cat_to_onehot: 4,
     max_cat_threshold: 64,
+    cat_smooth: 10.0,
+    cat_l2: 10.0,
+    min_data_per_group: 100.0,
   }
 }
 
@@ -493,18 +502,6 @@ priv struct Split {
 let no_cats : FixedArray[Bool] = []
 
 ///|
-/// Categorical splits: categories are sorted by g / (h + cat_smooth) for
-/// partition splits, which leave out categories with fewer than
-/// min_cat_rows rows (estimated from the hessian) and add cat_l2 to lambda.
-let cat_smooth : Double = 10.0
-
-///|
-let cat_l2 : Double = 10.0
-
-///|
-let min_cat_rows : Double = 100.0
-
-///|
 priv struct Grower {
   data : Binned
   p : TrainParams
@@ -774,7 +771,7 @@ fn Grower::cat_split(
   let mut best_hl = 0.0
   let order : Array[Int32] = []
   let onehot = k <= self.p.max_cat_to_onehot
-  let lam = if onehot { 0.0 } else { cat_l2 }
+  let lam = if onehot { 0.0 } else { self.p.cat_l2 }
   // try right sums (gr, hr) with missing left and right
   let try_set = fn(gr : Double, hr : Double, lo : Int32, hi : Int32) {
     // missing values and the categories without a bin go left, as
@@ -810,7 +807,7 @@ fn Grower::cat_split(
     // categories with enough rows, by their mean gradient
     let per_row = h / count.to_double()
     for i in 0..<k {
-      if ch[i] >= min_cat_rows * per_row {
+      if ch[i] >= self.p.min_data_per_group * per_row {
         order.push(i)
       }
     }
@@ -818,7 +815,7 @@ fn Grower::cat_split(
     if m < 2 {
       return None
     }
-    order.sort_by_key(i => cg[i] / (ch[i] + cat_smooth))
+    order.sort_by_key(i => cg[i] / (ch[i] + self.p.cat_smooth))
     let limit = if m - 1 < self.p.max_cat_threshold {
       m - 1
     } else {
@@ -1747,17 +1744,11 @@ fn train_json(
   if p.grow_policy != "depthwise" && p.grow_policy != "lossguide" {
     raise InvalidModel("grow_policy must be depthwise or lossguide")
   }
-  // categories kept per categorical feature: up to 1024, fewer when the
-  // histogram slots (UInt16) would run out
+  // categories kept per categorical feature: as many as the histogram
+  // slots (UInt16) allow
   let ncat = p.categorical.length()
   let room = 65535 - 2 * data.cols - (data.cols - ncat) * p.max_bin
-  let cat_cap = if ncat == 0 {
-    0
-  } else if room / ncat < 1024 {
-    room / ncat
-  } else {
-    1024
-  }
+  let cat_cap = if ncat == 0 { 0 } else { room / ncat }
   if ncat > 0 && cat_cap < 2 {
     raise InvalidModel("too many features times bins for training")
   }

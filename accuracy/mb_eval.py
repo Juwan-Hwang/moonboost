@@ -2,7 +2,7 @@
 import numpy as np, subprocess, sys, os, time, json
 from sklearn.metrics import roc_auc_score
 os.chdir(os.path.expanduser('~/mb/acc'))
-B=os.path.expanduser('~/mb/moonboost/_build/native/release/build/cmd/main/main.exe')
+B=os.environ.get('MB_BIN',os.path.expanduser('~/mb/moonboost/_build/native/release/build/cmd/main/main.exe'))
 if not os.path.exists('Xh.csv'):
   Xtr=np.load('/tmp/Xtr.npy'); Xte=np.load('/tmp/Xte.npy')
   hr=lambda X:np.c_[X,X[:,3]//100,X[:,3]%100]

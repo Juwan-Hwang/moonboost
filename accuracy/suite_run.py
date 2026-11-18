@@ -19,7 +19,7 @@ def mb_fit(Xf,yf,Xs,cats,args):
   return out
 def lgb_fit(Xf,yf,Xs,cats,kw):
   p={'objective':'binary','learning_rate':0.1,'num_threads':1,'verbose':-1}; p.update(kw)
-  m=lgb.train(p,lgb.Dataset(Xf,label=yf,categorical_feature=list(cats)),100); return [m.predict(X) for X in Xs]
+  m=lgb.train(p,lgb.Dataset(Xf,label=yf,categorical_feature=[int(c) for c in cats]),100); return [m.predict(X) for X in Xs]
 def xgb_fit(Xf,yf,Xs,cats,kw):
   ft=['c' if j in set(cats) else 'q' for j in range(Xf.shape[1])]
   p={'objective':'binary:logistic','eta':0.1,'tree_method':'hist','nthread':1}; p.update(kw)
@@ -43,5 +43,6 @@ for n in names:
       except Exception as e:
         print(n,lib,cfg,'ERR',str(e)[:200],flush=True); continue
       if best is None or v>best[0]: best=(v,a,cfg)
+    if best is None: print(n,lib,'no result',flush=True); continue
     res[lib]=best; print('%-14s %-10s valid %.4f test %.4f  %s  (%.0fs)'%(n,lib,best[0],best[1],best[2],time.perf_counter()-t),flush=True)
   with open(os.path.expanduser('~/mb/acc/suite_results.jsonl'),'a') as f: f.write(json.dumps({'ds':n,**{k:[v[0],v[1],str(v[2])] for k,v in res.items() if v}})+'\n')

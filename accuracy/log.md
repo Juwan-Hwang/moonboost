@@ -21,3 +21,6 @@
 | M3 | moonboost oh64（2048 叶） / min_child_weight 5 | 0.7858 / 0.7833 | oh64≈oh32；mcw5 变差 |
 | M4 | moonboost cat_crossfit（N1 移植，2048/4096 叶） | 0.7853 / 0.7866 vs 0.7855 / 0.7878 | 否决：原型收益未复现，且慢 60% |
 | P10 | LightGBM oh32 3072 / 4096 叶；同 moonboost 正则（λ=1、min_sum_hessian=1、min_data=1）2048/4096 | 0.7825 / 0.7823；0.7780 / 0.7803 | LightGBM 最佳 0.7825，moonboost 4096 叶 0.7878 领先 0.005 |
+| M5 | 多数据集（OpenML 10 个二分类，80/20，100 轮 lr0.1，每库 4 组配置按验证集选） | 胜：credit 0.832/0.817/0.790、kdd_upselling 0.855/0.848/0.840、higgs 0.799/0.797/0.798；平：adult、bank、phoneme、miniboone、electricity；负：amazon 0.851/0.850/**0.867**、click 0.690/0.694/0.694 | 高基数类别（amazon）默认 min_data_per_group=100 太严 |
+| M6 | amazon：min_data_per_group 1 / depth 5 / lambda 5 | 0.8134→0.8614→0.8683 | 与 XGBoost 0.8673 持平；airline 上 mdpg=1 反而降到 0.7774（100 时 0.7855），参数依数据而定 |
+| M7 | 叶堆（O(log L) 取最大增益叶） | airline 2048 叶模型不变（0.7855），用时下降 | 保留 |

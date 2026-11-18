@@ -114,6 +114,11 @@ pub(all) struct TrainParams {
   gamma : Double
   min_child_weight : Double
   max_bin : Int32
+  grow_policy : String
+  max_leaves : Int32
+  categorical : Array[Int32]
+  max_cat_to_onehot : Int32
+  max_cat_threshold : Int32
 }
 pub fn TrainParams::default() -> Self
 

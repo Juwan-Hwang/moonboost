@@ -282,10 +282,41 @@ fn bin_code(v : Float, k : Int32) -> UInt16 {
 }
 
 ///|
+/// The up to `cap` values that occur most often in sorted `vals` (ties to
+/// the smaller value), in increasing order.
+fn frequent_values(vals : FixedArray[Float], cap : Int32) -> Array[Float] {
+  let distinct : Array[Float] = []
+  let counts : Array[Int32] = []
+  for i, v in vals {
+    if i == 0 || v != vals[i - 1] {
+      distinct.push(v)
+      counts.push(1)
+    } else {
+      counts[counts.length() - 1] = counts[counts.length() - 1] + 1
+    }
+  }
+  if distinct.length() <= cap {
+    return distinct
+  }
+  let idx = Array::makei(distinct.length(), i => i)
+  idx.sort_by((a, b) => {
+    if counts[a] != counts[b] {
+      counts[b].compare(counts[a])
+    } else {
+      a.compare(b)
+    }
+  })
+  let keep = idx[:cap].to_owned()
+  keep.sort()
+  keep.map(i => distinct[i])
+}
+
+///|
 fn bin_matrix(
   m : DenseMatrix,
   max_bin : Int32,
   is_cat : FixedArray[Bool],
+  cat_cap : Int32,
 ) -> Binned {
   let rows = m.rows
   let cols = m.cols
@@ -301,14 +332,45 @@ fn bin_matrix(
     if n > 0 {
       lowest[f] = vals[0]
     }
-    if n > 0 && is_cat[f] {
-      // every category but the smallest opens a bin
-      for i in 1..<n {
-        if vals[i] != vals[i - 1] {
-          cuts.push(vals[i])
-        }
+    if is_cat[f] {
+      // a bin for each of the cat_cap most frequent categories, in
+      // increasing order; the others share bin 0 with missing values
+      let kept = frequent_values(vals, cat_cap)
+      if kept.length() > 0 {
+        lowest[f] = kept[0]
       }
-    } else if n > 0 {
+      for i in 1..<kept.length() {
+        cuts.push(kept[i])
+      }
+      cut_start[f + 1] = cuts.length()
+      let data = m.data
+      for r in 0..<rows {
+        let v = data[r * cols + f]
+        let mut b = 0
+        if !v.is_nan() {
+          // binary search for v among kept
+          let mut a = 0
+          let mut z = kept.length()
+          while a < z {
+            let mid = (a + z) / 2
+            if kept[mid] < v {
+              a = mid + 1
+            } else {
+              z = mid
+            }
+          }
+          if a < kept.length() && kept[a] == v {
+            b = a + 1
+          }
+        }
+        if b == 0 {
+          missing[f] = true
+        }
+        by_col.unsafe_set(f * rows + r, b.to_uint16())
+      }
+      continue
+    }
+    if n > 0 {
       // count distinct values
       let mut distinct = 1
       for i in 1..<n {
@@ -715,10 +777,9 @@ fn Grower::cat_split(
   let lam = if onehot { 0.0 } else { cat_l2 }
   // try right sums (gr, hr) with missing left and right
   let try_set = fn(gr : Double, hr : Double, lo : Int32, hi : Int32) {
-    for dl in 0..<2 {
-      if dl == 0 && mh == 0.0 {
-        continue
-      }
+    // missing values and the categories without a bin go left, as
+    // categories absent from the right set do in the model
+    for dl in 1..<2 {
       // dl 1: missing left (in the rest); dl 0: missing right
       let (gr2, hr2) = if dl == 1 { (gr, hr) } else { (gr + mg, hr + mh) }
       let gl = g - gr2
@@ -1123,6 +1184,61 @@ priv struct Pending {
 }
 
 ///|
+fn pending_gain(p : Pending) -> Double {
+  match p.split {
+    Some(s) => s.gain
+    None => 0.0
+  }
+}
+
+///|
+fn heap_push(heap : Array[Pending], p : Pending) -> Unit {
+  heap.push(p)
+  let mut i = heap.length() - 1
+  while i > 0 {
+    let up = (i - 1) / 2
+    if pending_gain(heap[up]) >= pending_gain(heap[i]) {
+      break
+    }
+    let t = heap[up]
+    heap[up] = heap[i]
+    heap[i] = t
+    i = up
+  }
+}
+
+///|
+/// Removes and returns the leaf with the largest gain.
+fn heap_pop(heap : Array[Pending]) -> Pending {
+  let top = heap[0]
+  let last = heap.unsafe_pop()
+  let n = heap.length()
+  if n > 0 {
+    heap[0] = last
+    let mut i = 0
+    while true {
+      let l = 2 * i + 1
+      let r = l + 1
+      let mut m = i
+      if l < n && pending_gain(heap[l]) > pending_gain(heap[m]) {
+        m = l
+      }
+      if r < n && pending_gain(heap[r]) > pending_gain(heap[m]) {
+        m = r
+      }
+      if m == i {
+        break
+      }
+      let t = heap[m]
+      heap[m] = heap[i]
+      heap[i] = t
+      i = m
+    }
+  }
+  top
+}
+
+///|
 /// Loss-guided growth: repeatedly splits the leaf whose best split gains
 /// the most, until max_leaves leaves (when set) or no split gains.
 fn Grower::grow_lossguide(
@@ -1137,43 +1253,41 @@ fn Grower::grow_lossguide(
   let can_split = fn(depth : Int32, lo : Int32, hi : Int32) {
     (max_depth <= 0 || depth < max_depth) && hi - lo >= 2
   }
-  let pending : Array[Pending] = [
-    {
-      node: 0,
-      lo: 0,
-      hi: n,
-      hist,
-      slot: 0,
-      g,
-      h,
-      depth: 0,
-      level: 0,
-      split: if can_split(0, 0, n) {
-        self.best_split(hist, g, h, n)
-      } else {
-        None
-      },
+  // splittable leaves in a max-heap on gain; leaves that cannot split
+  let heap : Array[Pending] = []
+  let done : Array[Pending] = []
+  let add = fn(p : Pending) {
+    if p.split is Some(_) {
+      heap_push(heap, p)
+    } else {
+      done.push(p)
+    }
+  }
+  add({
+    node: 0,
+    lo: 0,
+    hi: n,
+    hist,
+    slot: 0,
+    g,
+    h,
+    depth: 0,
+    level: 0,
+    split: if can_split(0, 0, n) {
+      self.best_split(hist, g, h, n)
+    } else {
+      None
     },
-  ]
+  })
   // histogram buffers not in use (JS reuses a buffer per slot)
   let free : Array[Int32] = []
   let mut slots = 1
   let mut leaves = 1
   while self.p.max_leaves <= 0 || leaves < self.p.max_leaves {
-    let mut best = -1
-    let mut best_gain = 0.0
-    for i, p in pending {
-      if p.split is Some(s) && (best < 0 || s.gain > best_gain) {
-        best = i
-        best_gain = s.gain
-      }
-    }
-    if best < 0 {
+    if heap.length() == 0 {
       break
     }
-    let p = pending[best]
-    pending[best] = pending[pending.length() - 1]
-    ignore(pending.pop())
+    let p = heap_pop(heap)
     guard p.split is Some(s) else { abort("pending leaf without split") }
     let lo = p.lo
     let hi = p.hi
@@ -1203,7 +1317,7 @@ fn Grower::grow_lossguide(
     let split_r = can_split(dl, mid, hi)
     if !split_l && !split_r {
       free.push(p.slot)
-      pending.push({
+      add({
         ..p,
         node: l,
         hi: mid,
@@ -1213,7 +1327,7 @@ fn Grower::grow_lossguide(
         level,
         split: None,
       })
-      pending.push({
+      add({
         ..p,
         node: r,
         lo: mid,
@@ -1242,7 +1356,7 @@ fn Grower::grow_lossguide(
     } else {
       (p.hist, p.slot, small, slot)
     }
-    pending.push({
+    add({
       node: l,
       lo,
       hi: mid,
@@ -1258,7 +1372,7 @@ fn Grower::grow_lossguide(
         None
       },
     })
-    pending.push({
+    add({
       node: r,
       lo: mid,
       hi,
@@ -1275,7 +1389,10 @@ fn Grower::grow_lossguide(
       },
     })
   }
-  for p in pending {
+  for p in heap {
+    self.finish_leaf(tree, p.node, p.lo, p.hi, p.level)
+  }
+  for p in done {
     self.finish_leaf(tree, p.node, p.lo, p.hi, p.level)
   }
 }
@@ -1630,7 +1747,21 @@ fn train_json(
   if p.grow_policy != "depthwise" && p.grow_policy != "lossguide" {
     raise InvalidModel("grow_policy must be depthwise or lossguide")
   }
-  let binned = bin_matrix(data, p.max_bin, is_cat)
+  // categories kept per categorical feature: up to 1024, fewer when the
+  // histogram slots (UInt16) would run out
+  let ncat = p.categorical.length()
+  let room = 65535 - 2 * data.cols - (data.cols - ncat) * p.max_bin
+  let cat_cap = if ncat == 0 {
+    0
+  } else if room / ncat < 1024 {
+    room / ncat
+  } else {
+    1024
+  }
+  if ncat > 0 && cat_cap < 2 {
+    raise InvalidModel("too many features times bins for training")
+  }
+  let binned = bin_matrix(data, p.max_bin, is_cat, cat_cap)
   // histogram slots are stored as UInt16
   if binned.cuts.length() + 2 * data.cols > 65535 {
     raise InvalidModel("too many features times bins for training")

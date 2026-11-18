@@ -1744,11 +1744,18 @@ fn train_json(
   if p.grow_policy != "depthwise" && p.grow_policy != "lossguide" {
     raise InvalidModel("grow_policy must be depthwise or lossguide")
   }
-  // categories kept per categorical feature: as many as the histogram
-  // slots (UInt16) allow
+  // categories kept per categorical feature: the max_bin - 1 most
+  // frequent (bin 0 holds missing values and the rest), fewer when the
+  // histogram slots (UInt16) would run out
   let ncat = p.categorical.length()
   let room = 65535 - 2 * data.cols - (data.cols - ncat) * p.max_bin
-  let cat_cap = if ncat == 0 { 0 } else { room / ncat }
+  let cat_cap = if ncat == 0 {
+    0
+  } else if room / ncat < p.max_bin - 1 {
+    room / ncat
+  } else {
+    p.max_bin - 1
+  }
   if ncat > 0 && cat_cap < 2 {
     raise InvalidModel("too many features times bins for training")
   }

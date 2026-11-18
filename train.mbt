@@ -1178,6 +1178,8 @@ priv struct Pending {
   depth : Int32
   level : Int32
   split : Split?
+  // whether the leaf's rows are in the scratch buffer (else in rows)
+  in_scratch : Bool
 }
 
 ///|
@@ -1236,6 +1238,19 @@ fn heap_pop(heap : Array[Pending]) -> Pending {
 }
 
 ///|
+/// Makes `b` the current rows when `scratch`, else `a` (the other is the
+/// scratch buffer).
+fn Grower::use_rows(self : Grower, scratch : Bool, a : I32s, b : I32s) -> Unit {
+  if scratch {
+    self.rows = b
+    self.scratch = a
+  } else {
+    self.rows = a
+    self.scratch = b
+  }
+}
+
+///|
 /// Loss-guided growth: repeatedly splits the leaf whose best split gains
 /// the most, until max_leaves leaves (when set) or no split gains.
 fn Grower::grow_lossguide(
@@ -1250,6 +1265,10 @@ fn Grower::grow_lossguide(
   let can_split = fn(depth : Int32, lo : Int32, hi : Int32) {
     (max_depth <= 0 || depth < max_depth) && hi - lo >= 2
   }
+  // a leaf's rows are in one of the two row buffers: partitioning reads
+  // them from one and writes the children's to the other
+  let a0 = self.rows
+  let b0 = self.scratch
   // splittable leaves in a max-heap on gain; leaves that cannot split
   let heap : Array[Pending] = []
   let done : Array[Pending] = []
@@ -1270,6 +1289,7 @@ fn Grower::grow_lossguide(
     h,
     depth: 0,
     level: 0,
+    in_scratch: false,
     split: if can_split(0, 0, n) {
       self.best_split(hist, g, h, n)
     } else {
@@ -1293,17 +1313,15 @@ fn Grower::grow_lossguide(
     let copy = level == 0 &&
       self.compact_at.length() > 0 &&
       depth + 1 == self.compact_at[0]
+    self.use_rows(p.in_scratch, a0, b0)
     let mid = if copy {
       self.partition_copy(lo, hi, s)
     } else {
       self.partition(lo, hi, s, level)
     }
-    // the children's rows are in scratch[lo:hi]
-    let rows = self.rows
-    let scratch = self.scratch
-    for i in lo..<hi {
-      rows.unsafe_set(i, scratch.unsafe_get(i))
-    }
+    // the children's rows are in the other buffer, which becomes theirs
+    let child_scratch = !p.in_scratch
+    self.use_rows(child_scratch, a0, b0)
     let level = if copy { 1 } else { level }
     let (l, r) = self.add_split(tree, p.node, s, p.g, p.h)
     leaves += 1
@@ -1323,6 +1341,7 @@ fn Grower::grow_lossguide(
         depth: dl,
         level,
         split: None,
+        in_scratch: child_scratch,
       })
       add({
         ..p,
@@ -1333,6 +1352,7 @@ fn Grower::grow_lossguide(
         depth: dl,
         level,
         split: None,
+        in_scratch: child_scratch,
       })
       continue
     }
@@ -1363,6 +1383,7 @@ fn Grower::grow_lossguide(
       h: s.hl,
       depth: dl,
       level,
+      in_scratch: child_scratch,
       split: if split_l {
         self.best_split(hl_hist, s.gl, s.hl, mid - lo)
       } else {
@@ -1379,6 +1400,7 @@ fn Grower::grow_lossguide(
       h: hr,
       depth: dl,
       level,
+      in_scratch: child_scratch,
       split: if split_r {
         self.best_split(hr_hist, gr, hr, hi - mid)
       } else {
@@ -1387,11 +1409,14 @@ fn Grower::grow_lossguide(
     })
   }
   for p in heap {
+    self.use_rows(p.in_scratch, a0, b0)
     self.finish_leaf(tree, p.node, p.lo, p.hi, p.level)
   }
   for p in done {
+    self.use_rows(p.in_scratch, a0, b0)
     self.finish_leaf(tree, p.node, p.lo, p.hi, p.level)
   }
+  self.use_rows(false, a0, b0)
 }
 
 ///|

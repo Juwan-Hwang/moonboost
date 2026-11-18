@@ -247,8 +247,8 @@ Cold start is import, model load and the first prediction. Where
 onnxruntime-web differs from XGBoost, it is by at most 1.2e-7, which is
 enough to reorder near-ties in a ranking. One-row-per-call times move by up
 to about 40% between runs on this VM; the other columns by a few percent.
-What ships to the browser: moonboost is one 181 KB module (56 KB gzipped, LightGBM support
-included); onnxruntime-web's
+What ships to the browser: moonboost is one 270 KB module (77 KB gzipped, LightGBM support
+and training included); onnxruntime-web's
 WebAssembly build is `ort.wasm.min.mjs` (54 KB) plus
 `ort-wasm-simd-threaded.mjs` (25 KB) plus a 14.8 MB `.wasm` file (3.8 MB
 gzipped). Model files are smaller in ONNX (97 KB against 223 KB of JSON for
@@ -328,7 +328,7 @@ How the batch path works (`lockstep.mbt`):
 
 Leaves are still added in tree order in float32, which is what keeps the
 results identical. Models with categorical splits use the verified kernel.
-The JS bundle minified with esbuild is 181 KB, 56 KB gzipped, with no other runtime.
+The JS bundle minified with esbuild is 270 KB, 77 KB gzipped, training included, with no other runtime.
 
 ### Against compiled engines
 

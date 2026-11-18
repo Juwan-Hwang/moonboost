@@ -43,6 +43,8 @@ trust because it is tested against XGBoost itself.
 | Browser demo (`docs/`, GitHub Pages) | done |
 | XGBoost UBJSON models (`.ubj`) | done |
 | Training: histogram trees for `reg:squarederror`, `binary:logistic`, `multi:softprob`, `multi:softmax`, written as XGBoost JSON | done |
+| Training: categorical features (one category against the rest, or a set of categories) | done |
+| Training: loss-guided growth (`grow_policy: "lossguide"`, `max_leaves`) | done |
 | Training in browsers: JS, and a WebAssembly GC module (`webgc/`) | done |
 
 Later: multithreaded training and batch prediction, once MoonBit ships
@@ -102,6 +104,42 @@ setup), two runs each:
 moonboost native takes about half the time of XGBoost and about 35% less
 than LightGBM here (`bench/gbmperf_compare.py`; all three in the same
 session). moonboost's times leave out reading the CSV.
+
+### Categorical features and loss-guided growth
+
+Columns listed in `categorical` hold category codes (non-negative
+integers). A split on one sends one category against the rest when the
+node holds at most `max_cat_to_onehot` categories, and otherwise a set of
+categories taken from either end of their order by mean gradient
+(`cat_smooth`, `cat_l2`, `min_data_per_group` and `max_cat_threshold` as in
+LightGBM). Each categorical column keeps its `max_bin - 1` most frequent
+categories; the rest share a bin with missing values, and both go left, as
+unlisted categories do in the model. `grow_policy: "lossguide"` splits the
+leaf with the largest gain first, up to `max_leaves` leaves (`max_depth: 0`
+for no depth limit). The models are XGBoost JSON with categorical splits:
+XGBoost loads them and predicts the same bits.
+
+```
+moonboost train rows.csv labels.csv -o model.json --objective binary:logistic \
+  --rounds 100 --eta 0.1 --categorical 0,1,2,5,6,7 --max-cat-to-onehot 32 \
+  --grow-policy lossguide --depth 0 --max-leaves 1023
+```
+
+On the airline data with its six categorical columns as categories (and
+the departure hour and minute as two more columns), 100 rounds, eta 0.1,
+`max_cat_to_onehot` 32, the same number of leaves for every library, one
+thread on one core of the VM above (`bench/airline_categorical.py`):
+
+| Leaves | moonboost | LightGBM 4.7.0 | XGBoost 3.4.1 `hist` |
+|---|---|---|---|
+| 255 | 6.8 s, AUC 0.7629 | 6.5 s, AUC 0.7612 | 20.4 s, AUC 0.7547 |
+| 1023 | 10.7 s, AUC 0.7779 | 9.6 s, AUC 0.7761 | 37.1 s, AUC 0.7638 |
+| 4095 | 19.7 s, AUC 0.7868 | 19.6 s, AUC 0.7829 | 56.2 s, AUC 0.7655 |
+
+At every size moonboost's model is the most accurate. At 4095 leaves it
+trains in the same time as LightGBM with 0.004 more AUC; at 255 and 1023
+leaves LightGBM is 5 to 10% faster. With the categories label-encoded
+instead, moonboost reaches 0.7520 at depth 10.
 
 Training also runs in the browser, and every build makes the same model bit
 for bit. `webgc/` is a 37 KB WebAssembly GC module with a loader,

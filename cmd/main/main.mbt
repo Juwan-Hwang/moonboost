@@ -295,6 +295,7 @@ fn train(args : ArrayView[String]) -> Unit raise {
       }
       "--max-cat-to-onehot" =>
         p = { ..p, max_cat_to_onehot: @string.parse_int(next()), }
+      "--split-penalty" => p = { ..p, split_penalty: num(), }
       "--cat-smooth" => p = { ..p, cat_smooth: num(), }
       "--cat-l2" => p = { ..p, cat_l2: num(), }
       "--min-data-per-group" => p = { ..p, min_data_per_group: num(), }

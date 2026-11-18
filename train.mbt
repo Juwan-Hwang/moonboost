@@ -43,6 +43,10 @@ pub(all) struct TrainParams {
   cat_smooth : Double
   cat_l2 : Double
   min_data_per_group : Double
+  /// subtracted from a split's gain, times the log of the number of
+  /// splits its feature offered: a feature with more candidate splits
+  /// finds a larger gain by chance alone
+  split_penalty : Double
 }
 
 ///|
@@ -67,6 +71,7 @@ pub fn TrainParams::default() -> TrainParams {
     cat_smooth: 10.0,
     cat_l2: 10.0,
     min_data_per_group: 100.0,
+    split_penalty: 0.0,
   }
 }
 
@@ -665,6 +670,24 @@ fn Grower::best_split(
       }
       continue
     }
+    let pen = if self.p.split_penalty > 0.0 {
+      let mut k = 0
+      for b in 0..<(n - 1) {
+        if hist_g(hist, start + b) != 0.0 || hist_h(hist, start + b) != 0.0 {
+          k += 1
+        }
+      }
+      if mh > 0.0 {
+        k = k * 2
+      }
+      if k > 1 {
+        self.p.split_penalty * @math.ln(k.to_double())
+      } else {
+        0.0
+      }
+    } else {
+      0.0
+    }
     // the quantised sums are integers below 2^53, exact in a Double
     let mut qg = 0.0
     let mut qh = 0.0
@@ -683,7 +706,7 @@ fn Grower::best_split(
       let gr = g - gl
       let hr = h - hl
       if hl >= mcw && hr >= mcw {
-        let gain = self.score(gl, hl) + self.score(gr, hr) - parent
+        let gain = self.score(gl, hl) + self.score(gr, hr) - parent - pen
         if gain > best_gain {
           best_gain = gain
           best = Some({
@@ -704,7 +727,7 @@ fn Grower::best_split(
         let gr2 = g - gl2
         let hr2 = h - hl2
         if hl2 >= mcw && hr2 >= mcw {
-          let gain = self.score(gl2, hl2) + self.score(gr2, hr2) - parent
+          let gain = self.score(gl2, hl2) + self.score(gr2, hr2) - parent - pen
           if gain > best_gain {
             best_gain = gain
             best = Some({
@@ -771,6 +794,7 @@ fn Grower::cat_split(
   let mut best_hl = 0.0
   let order : Array[Int32] = []
   let onehot = k <= self.p.max_cat_to_onehot
+  let mut pen = 0.0
   let lam = if onehot { 0.0 } else { self.p.cat_l2 }
   // try right sums (gr, hr) with missing left and right
   let try_set = fn(gr : Double, hr : Double, lo : Int32, hi : Int32) {
@@ -784,7 +808,8 @@ fn Grower::cat_split(
       if hl >= mcw && hr2 >= mcw {
         let gain = gl * gl / (hl + self.p.lambda + lam) +
           gr2 * gr2 / (hr2 + self.p.lambda + lam) -
-          parent
+          parent -
+          pen
         if gain > best_gain {
           best_gain = gain
           best_lo = lo
@@ -797,6 +822,9 @@ fn Grower::cat_split(
     }
   }
   if onehot {
+    if self.p.split_penalty > 0.0 && k > 1 {
+      pen = self.p.split_penalty * @math.ln(k.to_double())
+    }
     for i in 0..<k {
       order.push(i)
     }
@@ -820,6 +848,9 @@ fn Grower::cat_split(
       m - 1
     } else {
       self.p.max_cat_threshold
+    }
+    if self.p.split_penalty > 0.0 && limit > 0 {
+      pen = self.p.split_penalty * @math.ln((2 * limit).to_double())
     }
     let mut gr = 0.0
     let mut hr = 0.0

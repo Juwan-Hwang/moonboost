@@ -122,6 +122,7 @@ pub(all) struct TrainParams {
   cat_smooth : Double
   cat_l2 : Double
   min_data_per_group : Double
+  split_penalty : Double
 }
 pub fn TrainParams::default() -> Self
 

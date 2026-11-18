@@ -910,7 +910,6 @@ fn Grower::partition(
   hi : Int32,
   s : Split,
   level : Int32,
-  skewed : Bool,
 ) -> Int32 {
   let limit = s.bin + 1
   // a missing value (bin 0) goes left as bin 0, or right as a bin past limit
@@ -930,22 +929,6 @@ fn Grower::partition(
       let words = self.words
       let column = s.feature / word_bins
       let shift = s.feature % word_bins * 8
-      if skewed {
-        // nearly all rows go one way, so a branch predicts well and each
-        // row is written once
-        for i in lo..<hi {
-          let r = rows.unsafe_get(i)
-          let byte = word_byte(cb.unsafe_get(r * words + column), shift)
-          if go.unsafe_get(byte) != 0 {
-            dst.unsafe_set(a, r)
-            a += 1
-          } else {
-            dst.unsafe_set(b, r)
-            b -= 1
-          }
-        }
-        return a
-      }
       for i in lo..<hi {
         let r = rows.unsafe_get(i)
         let byte = word_byte(cb.unsafe_get(r * words + column), shift)
@@ -1021,12 +1004,6 @@ fn Grower::right_codes(self : Grower, s : Split) -> Array[Int32] {
     }
   }
   out
-}
-
-///|
-/// Whether a split sends at most a tenth of the node's hessian one way.
-fn skewed(hl : Double, h : Double) -> Bool {
-  hl < 0.1 * h || hl > 0.9 * h
 }
 
 ///|
@@ -1340,7 +1317,7 @@ fn Grower::grow_lossguide(
     let mid = if copy {
       self.partition_copy(lo, hi, s)
     } else {
-      self.partition(lo, hi, s, level, skewed(s.hl, p.h))
+      self.partition(lo, hi, s, level)
     }
     // the children's rows are in the other buffer, which becomes theirs
     let child_scratch = !p.in_scratch
@@ -1480,7 +1457,7 @@ fn Grower::grow(
       let mid = if copy {
         self.partition_copy(lo, hi, s)
       } else {
-        self.partition(lo, hi, s, level, skewed(s.hl, h))
+        self.partition(lo, hi, s, level)
       }
       let level = if copy { 1 } else { level }
       // the children's rows are in scratch; they become the current rows

@@ -34,3 +34,10 @@
 | S3 | 原生 histogram 为两字（9–16 特征）展开 | lossguide 255 叶 8.56→7.54 s（-12%）；depthwise 10 层 6.34→5.73 s（-10%）；模型相同 | 保留 |
 | S4 | 偏斜切分（一侧 <10% hessian）用分支单写 partition | 1023 叶 9.28→9.73 s；depth10 5.34→5.48 s | 否决：分支版更慢，已回退 |
 | T1 | 干净计时（单核顺序，airline+hour/minute，oh32） | 255 叶 mb 7.7 s/.7629，lgb 6.4/.7612，xgb 19.1/.7547；1023 叶 10.3/.7779，9.0/.7761，30.1/.7638；4095 叶 19.4/.7868，19.4/.7829 | 准确率每档领先；速度 255–1023 叶慢 LightGBM ~15%（S3 前测），4095 持平 |
+| S5 | lossguide：分区时顺带累加（按 hessian 猜的）小侧直方图，省一次 gather（两字布局） | 255 叶 7.17/7.08 s → 9.08/8.14 s | 否决：分支阻碍向量化/预测失败，更慢 |
+| C1 | 定位 amazon 落后：b5f99ff 起每个类别列只留 255 个高频类，amazon 第 0/1 列只覆盖 45%/29% 的行（其余并入缺失）；kdd_upselling 多列同样 | airline 各类别列覆盖 ≥99.8% | 原因确认，见 C2 |
+| C2 | 高频类覆盖 <99% 行时改为按槽位上限保留全部类别（否则仍 255，保一字节路径） | airline 255 叶模型逐字节相同、用时不变；amazon 5 次划分均值 .8487→**.8592**（xgb .8607，lgb .8563）；XGBoost 读模型逐位一致 | 保留，044f5c9 进 main |
+| R0 | 重复划分基线（rep.py：train+test 合并，5 次随机 80/20，每次每库 12 组等预算随机调参，按内层验证集选） | 测试 AUC 均值 mb/lgb/xgb：adult .9286/.9280/.9277，amazon .8487/.8563/.8607，bank .9348/.9355/.9345，click .6958/.6981/.6956，credit .7689/.7715/.7657，electricity .9804/.9789/.9811，higgs .8060/.8064/.8067，miniboone .9848/.9847/.9847，phoneme .9526/.9530/.9530 | 除 amazon 外全部在 ±0.003 内，即持平；没有一个数据集明显领先 |
+| C3 | amazon 同配置对照（depth 6，3 次划分） | cat_smooth 0：mb .8514 vs xgb .8711；cat_smooth 1/10 + mdpg 0 + cat_l2 0：.8709/.8713 | 差距来自类别正则默认值，算法本身与 XGBoost 持平。XGBoost 按 -g/h 排序、并列时靠浮点误差随机打破；我们整数量化后并列是精确的，cat_smooth>0 让大类别优先 |
+| S6 | 剖析 lossguide 255 叶：histogram 38%、partition 22%、主循环 8.5%、partition_copy 5.7% | — | 已有父减子、压缩拷贝；无明显低垂果实 |
+| F1 | 新功能 subsample / colsample_bytree / colsample_bynode / seed（未采样行梯度置零，同 XGBoost） | depth 8，3 次划分：credit .7671→.7827（bynode .6）/.7847（ss .8）；bank .9352→.9364；默认参数模型逐字节不变 | 保留，ea97a65 进 main；调参空间 v2（space2.py）三库同时加入行/列采样后重跑 |

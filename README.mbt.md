@@ -107,8 +107,8 @@ Training also runs in the browser, and every build makes the same model bit
 for bit. `webgc/` is a 37 KB WebAssembly GC module with a loader,
 `web/train_wasm.mjs` (`bench/train_wasm_bench.mjs` times it); in Node it
 trains the airline model above faster than native XGBoost and LightGBM.
-The ES module's `train` does the same in plain JS, at about twice the
-wasm-gc time: there the quantised sums are Doubles (Int64 would be a
+The ES module's `train` does the same in plain JS, at two to three times
+the wasm-gc time: there the quantised sums are Doubles (Int64 would be a
 BigInt) and the buffers typed arrays.
 
 The only other GBDT trainer for browsers we found is
@@ -246,8 +246,8 @@ backend), each engine in a fresh process. Means of two runs:
 Cold start is import, model load and the first prediction. Where
 onnxruntime-web differs from XGBoost, it is by at most 1.2e-7, which is
 enough to reorder near-ties in a ranking. One-row-per-call times move by up
-to about 40% between runs on this VM; the other columns by a few percent. What ships to the
-browser: moonboost is one 181 KB module (56 KB gzipped, LightGBM support
+to about 40% between runs on this VM; the other columns by a few percent.
+What ships to the browser: moonboost is one 181 KB module (56 KB gzipped, LightGBM support
 included); onnxruntime-web's
 WebAssembly build is `ort.wasm.min.mjs` (54 KB) plus
 `ort-wasm-simd-threaded.mjs` (25 KB) plus a 14.8 MB `.wasm` file (3.8 MB
@@ -488,7 +488,7 @@ and `predict_lightgbm_raw(model, row)`. An XGBoost `.ubj` file loads with
 `load_model_ubjson(bytes)`, where `bytes` is a `Uint8Array`.
 `train(rows, cols, labels, objective, num_class, num_round, max_depth, eta)`
 trains in the page and returns XGBoost JSON text (`-1` or `""` keeps a
-default). For about twice the speed, train with the WebAssembly GC module
+default). For two to three times the speed, train with the WebAssembly GC module
 (build it with `moon build --target wasm-gc --release`; it is
 `_build/wasm-gc/release/build/webgc/webgc.wasm`):
 

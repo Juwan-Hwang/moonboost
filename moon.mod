@@ -25,11 +25,13 @@ keywords = [
   "machine-learning",
   "gradient-boosting",
   "decision-tree",
+  "lightgbm",
+  "wasm",
 ]
 
 preferred_target = "wasm"
 
-description = "Gradient boosted decision trees in pure MoonBit: load XGBoost models and predict on native, wasm and js."
+description = "Gradient boosted decision trees in pure MoonBit: predict XGBoost and LightGBM models bit for bit, and train histogram trees, on native, wasm, wasm-gc and js."
 
 import {
   "moonbitlang/x@0.5.7",

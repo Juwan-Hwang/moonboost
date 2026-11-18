@@ -1,0 +1,10 @@
+# Files left out of the mooncakes package (replaces .gitignore for publishing)
+.DS_Store
+_build/
+target/
+.mooncakes/
+.moonagent/
+bench/
+docs/
+tools/
+AGENTS.md

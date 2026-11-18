@@ -500,6 +500,10 @@ const json = train(rows, cols, labels, "binary:logistic", -1, 100, 6, 0.3);
 
 See `examples/node/iris.mjs`.
 
+Each [GitHub release](https://github.com/Juwan-Hwang/moonboost/releases)
+carries these files prebuilt: `moonboost.js` (the ES module above),
+`webgc.wasm` with `train_wasm.mjs`, and the CLI for Linux x86-64 and arm64.
+
 ## CLI
 
 ```
@@ -517,6 +521,11 @@ moon run cmd/main --target native -- train rows.csv labels.csv -o model.json --o
 `--margin` prints raw scores and `--leaf` prints the leaf reached in each tree.
 LightGBM text models work the same way; the CLI tells the formats apart by
 content. XGBoost UBJSON models are read when the file name ends in `.ubj`.
+The release binaries (`moonboost-linux-x86_64`, `moonboost-linux-arm64`) take
+the same arguments: `./moonboost-linux-x86_64 info model.json`.
+
+Load errors are `ModelError`, which prints as `InvalidModel: ...` or
+`Unsupported: ...`.
 
 ## Development
 

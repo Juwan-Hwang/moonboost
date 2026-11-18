@@ -21,6 +21,7 @@ pub(all) suberror ModelError {
 pub fn ModelError::equal(Self, Self) -> Bool
 pub fn ModelError::not_equal(Self, Self) -> Bool
 pub fn ModelError::to_repr(Self) -> @debug.Repr
+pub impl Show for ModelError
 
 // Types and methods
 type Compiled

@@ -111,6 +111,14 @@ The ES module's `train` does the same in plain JS, at about twice the
 wasm-gc time: there the quantised sums are Doubles (Int64 would be a
 BigInt) and the buffers typed arrays.
 
+The only other GBDT trainer for browsers we found is
+[ml-xgboost](https://www.npmjs.com/package/ml-xgboost) 1.1.2 (XGBoost
+compiled to WebAssembly with Emscripten, 2018). On the first 100k rows of
+the airline data, 30 rounds, depth 10, `tree_method=hist`, in Node 26: 1.01 s
+against 0.30 s for moonboost wasm-gc and 0.79 s for moonboost JS
+(`bench/ml_xgboost_bench.cjs`). Past about 150k rows ml-xgboost stops: its
+loader copies the data onto a 5 MB stack.
+
 ## Correctness
 
 Every XGBoost test model is trained by XGBoost 3.4.1

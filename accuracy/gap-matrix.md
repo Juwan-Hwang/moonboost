@@ -15,7 +15,7 @@
 | CatBoost depth10 无类别 | 0.7282 | 10.3 s |
 | CatBoost depth10 原生类别 | 0.7330 | 33.0 s |
 
-当前：❌ 落后最佳 0.0113 AUC。
+当前（M1，分支 acc 6a32feb）：moonboost lossguide 2048 叶 + 类别 0.7855 ✅ 领先 LightGBM 调优最佳 0.7781（onehot32+2048 叶）。计时为 4 任务并行，待单独复测。
 
 ## B. 维度清单
 

@@ -45,9 +45,11 @@ def hist_build(B, rows, lo, hi, g, h, start, H):
         for f in range(F):
             s = start[f] + B[f, r]
             H[s, 0] += gr; H[s, 1] += hr; H[s, 2] += 1.0
+            if (r & 1) == 0:
+                H[s, 3] += gr; H[s, 4] += hr; H[s, 5] += 1.0
 
 @nb.njit(cache=True)
-def best_split(H, start, nb_, iscat, G, Hs, N, lam, mcw, min_leaf, cat_smooth, cat_l2, max_cat, min_cat_group, out_left):
+def best_split(H, start, nb_, iscat, G, Hs, N, lam, mcw, min_leaf, cat_smooth, cat_l2, max_cat, min_cat_group, out_left, max_onehot, honest):
     # returns gain, feature, threshold-bin (numeric) or -1 (categorical, out_left filled), default_left
     parent = G * G / (Hs + lam)
     best = 0.0; bf = -1; bt = -1; bdl = False
@@ -70,23 +72,50 @@ def best_split(H, start, nb_, iscat, G, Hs, N, lam, mcw, min_leaf, cat_smooth, c
                     if gain > best:
                         best = gain; bf = f; bt = b; bdl = dl == 1
         else:
+            # few categories: one category against the rest
+            nz = 0
+            for b in range(1, n):
+                if H[s0 + b, 2] > 0: nz += 1
+            if nz <= max_onehot:
+                for b in range(1, n):
+                    if H[s0 + b, 2] == 0: continue
+                    gl = H[s0 + b, 0]; hl = H[s0 + b, 1]; cl = H[s0 + b, 2]
+                    GR = G - gl; HR = Hs - hl; CR = N - cl
+                    if hl < mcw or HR < mcw or cl < min_leaf or CR < min_leaf: continue
+                    gain = gl * gl / (hl + lam) + GR * GR / (HR + lam) - parent
+                    if gain > best:
+                        best = gain; bf = f; bt = -1; bdl = False
+                        bestcat[:] = False; bestcat[b] = True
+                continue
             # categories with enough data, sorted by g/(h+cat_smooth); missing/unseen bin 0 stays right
             m = 0
             ids = np.empty(n, np.int64); key = np.empty(n)
             for b in range(1, n):
                 if H[s0 + b, 2] >= min_cat_group:
-                    ids[m] = b; key[m] = H[s0 + b, 0] / (H[s0 + b, 1] + cat_smooth); m += 1
+                    ids[m] = b
+                    if honest: key[m] = H[s0 + b, 3] / (H[s0 + b, 4] + cat_smooth)
+                    else: key[m] = H[s0 + b, 0] / (H[s0 + b, 1] + cat_smooth)
+                    m += 1
             if m < 2: continue
             order = np.argsort(key[:m]); ids2 = ids[:m][order]
+            # odd-row totals for honest scoring
+            Go = 0.0; Ho = 0.0
+            for b in range(0, n):
+                Go += H[s0 + b, 0] - H[s0 + b, 3]; Ho += H[s0 + b, 1] - H[s0 + b, 4]
             for direction in range(2):
-                gl = 0.0; hl = 0.0; cl = 0.0
+                gl = 0.0; hl = 0.0; cl = 0.0; go_ = 0.0; ho_ = 0.0
                 lim = min(m - 1, max_cat)
                 for j in range(lim):
                     b = ids2[j] if direction == 0 else ids2[m - 1 - j]
                     gl += H[s0 + b, 0]; hl += H[s0 + b, 1]; cl += H[s0 + b, 2]
+                    go_ += H[s0 + b, 0] - H[s0 + b, 3]; ho_ += H[s0 + b, 1] - H[s0 + b, 4]
                     GR = G - gl; HR = Hs - hl; CR = N - cl
                     if hl < mcw or HR < mcw or cl < min_leaf or CR < min_leaf: continue
-                    gain = gl * gl / (hl + lam + cat_l2) + GR * GR / (HR + lam + cat_l2) - parent
+                    if honest:
+                        # odd-half gain, scaled to the full node (x2) so it competes with other splits
+                        gain = 2.0 * (go_ * go_ / (ho_ + lam / 2 + cat_l2 / 2) + (Go - go_) ** 2 / (Ho - ho_ + lam / 2 + cat_l2 / 2) - Go * Go / (Ho + lam / 2))
+                    else:
+                        gain = gl * gl / (hl + lam + cat_l2) + GR * GR / (HR + lam + cat_l2) - parent
                     if gain > best:
                         best = gain; bf = f; bt = -1; bdl = False
                         bestcat[:] = False
@@ -122,7 +151,7 @@ def node_sums(rows, lo, hi, g, h):
     return G, Hh
 
 @nb.njit(cache=True)
-def grow_tree(B, g, h, start, nb_, iscat, maxbins, max_leaves, max_depth, lam, mcw, min_leaf, cat_smooth, cat_l2, max_cat, min_cat_group, lr):
+def grow_tree(B, g, h, start, nb_, iscat, maxbins, max_leaves, max_depth, lam, mcw, min_leaf, cat_smooth, cat_l2, max_cat, min_cat_group, lr, max_onehot, honest):
     n = B.shape[1]; F = B.shape[0]; S = start[-1]
     rows = np.arange(n).astype(np.int64); tmp = np.empty(n, np.int64)
     maxn = 2 * max_leaves
@@ -132,12 +161,12 @@ def grow_tree(B, g, h, start, nb_, iscat, maxbins, max_leaves, max_depth, lam, m
     lo_ = np.zeros(maxn, np.int64); hi_ = np.zeros(maxn, np.int64); dep = np.zeros(maxn, np.int64)
     Gs = np.zeros(maxn); Hs_ = np.zeros(maxn)
     gain_ = -np.ones(maxn); sf = -np.ones(maxn, np.int64); st = np.zeros(maxn, np.int64); sdl = np.zeros(maxn, np.bool_)
-    hists = np.zeros((maxn, S, 3))
+    hists = np.zeros((maxn, S, 6))
     nn = 1; lo_[0] = 0; hi_[0] = n
     G0, H0 = node_sums(rows, 0, n, g, h); Gs[0] = G0; Hs_[0] = H0
     hist_build(B, rows, 0, n, g, h, start, hists[0])
     catbuf = np.zeros(maxbins, np.bool_)
-    gn, f_, t_, d_ = best_split(hists[0], start, nb_, iscat, G0, H0, n, lam, mcw, min_leaf, cat_smooth, cat_l2, max_cat, min_cat_group, catbuf)
+    gn, f_, t_, d_ = best_split(hists[0], start, nb_, iscat, G0, H0, n, lam, mcw, min_leaf, cat_smooth, cat_l2, max_cat, min_cat_group, catbuf, max_onehot, honest)
     gain_[0] = gn; sf[0] = f_; st[0] = t_; sdl[0] = d_; cats[0] = catbuf
     leaves = 1
     while leaves < max_leaves:
@@ -160,7 +189,7 @@ def grow_tree(B, g, h, start, nb_, iscat, maxbins, max_leaves, max_depth, lam, m
         leaves += 1
         for c in (l, r):
             if hi_[c] - lo_[c] >= 2 * min_leaf and dep[c] < max_depth:
-                gn, f_, t_, d_ = best_split(hists[c], start, nb_, iscat, Gs[c], Hs_[c], hi_[c] - lo_[c], lam, mcw, min_leaf, cat_smooth, cat_l2, max_cat, min_cat_group, catbuf)
+                gn, f_, t_, d_ = best_split(hists[c], start, nb_, iscat, Gs[c], Hs_[c], hi_[c] - lo_[c], lam, mcw, min_leaf, cat_smooth, cat_l2, max_cat, min_cat_group, catbuf, max_onehot, honest)
                 gain_[c] = gn; sf[c] = f_; st[c] = t_; sdl[c] = d_
                 if f_ >= 0 and t_ == -1: cats[c] = catbuf
     for i in range(nn):
@@ -195,7 +224,7 @@ def leaf_newton(rows, lo, hi, left, val, m, y, lam, lr, steps):
         val[i] = v * lr
 
 def train(Btr, ytr, spec, rounds=100, lr=0.1, max_leaves=1024, max_depth=64, lam=1.0, mcw=1e-3, min_leaf=20,
-          cat_smooth=10.0, cat_l2=10.0, max_cat=32, min_cat_group=100, evals=(), hook=None, leaf_steps=0):
+          cat_smooth=10.0, cat_l2=10.0, max_cat=32, min_cat_group=100, evals=(), hook=None, leaf_steps=0, max_onehot=4, honest=False):
     iscat = np.array([k == 'c' for k, _ in spec]); nb_ = np.array([len(s) + 2 if k == 'n' else len(s) + 1 for k, s in spec])
     start = np.concatenate([[0], np.cumsum(nb_)]).astype(np.int64); maxbins = int(nb_.max())
     p0 = ytr.mean(); base = np.log(p0 / (1 - p0))
@@ -204,7 +233,7 @@ def train(Btr, ytr, spec, rounds=100, lr=0.1, max_leaves=1024, max_depth=64, lam
     for it in range(rounds):
         p = 1 / (1 + np.exp(-m)); g = p - ytr; h = p * (1 - p)
         if hook: g, h = hook(it, m, g, h)
-        t = grow_tree(Btr, g, h, start, nb_, iscat, maxbins, max_leaves, max_depth, lam, mcw, min_leaf, cat_smooth, cat_l2, max_cat, min_cat_group, lr)
+        t = grow_tree(Btr, g, h, start, nb_, iscat, maxbins, max_leaves, max_depth, lam, mcw, min_leaf, cat_smooth, cat_l2, max_cat, min_cat_group, lr, max_onehot, honest)
         if leaf_steps: leaf_newton(t[8], t[9], t[10], t[4], t[6], m, ytr, lam, lr, leaf_steps)
         trees.append(t)
         nn, feat, thr, dlft, left, right, val, cats = t[:8]

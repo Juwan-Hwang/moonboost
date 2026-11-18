@@ -23,6 +23,7 @@ const USAGE : String =
   #|  --categorical 0,3,4  (columns of category codes)
   #|  --max-cat-to-onehot 4  --max-cat-threshold 64
   #|  --grow-policy depthwise | lossguide  --max-leaves 0
+  #|  --subsample 1  --colsample-bytree 1  --colsample-bynode 1  --seed 0
   #|labels.csv holds one label per line. The model is written as XGBoost JSON.
   #|
   #|Models are XGBoost JSON files (Booster.save_model("model.json")) or
@@ -300,6 +301,10 @@ fn train(args : ArrayView[String]) -> Unit raise {
       "--min-data-per-group" => p = { ..p, min_data_per_group: num(), }
       "--max-cat-threshold" =>
         p = { ..p, max_cat_threshold: @string.parse_int(next()), }
+      "--subsample" => p = { ..p, subsample: num(), }
+      "--colsample-bytree" => p = { ..p, colsample_bytree: num(), }
+      "--colsample-bynode" => p = { ..p, colsample_bynode: num(), }
+      "--seed" => p = { ..p, seed: @string.parse_int(next()), }
       _ => {
         if a.has_prefix("-") {
           raise CliError("unknown option \{a}")

@@ -315,3 +315,10 @@ fn Grower::histogram(
   }
   hist
 }
+
+///|
+/// Clears row r's quantised pair.
+fn q_zero(qa : QArr, r : Int32) -> Unit {
+  qa.unsafe_set(r * 2, 0.0)
+  qa.unsafe_set(r * 2 + 1, 0.0)
+}

@@ -122,6 +122,10 @@ pub(all) struct TrainParams {
   cat_smooth : Double
   cat_l2 : Double
   min_data_per_group : Double
+  subsample : Double
+  colsample_bytree : Double
+  colsample_bynode : Double
+  seed : Int32
 }
 pub fn TrainParams::default() -> Self
 

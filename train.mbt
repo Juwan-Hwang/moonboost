@@ -43,6 +43,14 @@ pub(all) struct TrainParams {
   cat_smooth : Double
   cat_l2 : Double
   min_data_per_group : Double
+  /// fraction of rows each tree learns from, drawn anew per tree (the
+  /// others get zero gradients, as in XGBoost)
+  subsample : Double
+  /// fraction of features each tree may split on, and of those, each node
+  colsample_bytree : Double
+  colsample_bynode : Double
+  /// seed of the row and feature sampling
+  seed : Int32
 }
 
 ///|
@@ -67,6 +75,10 @@ pub fn TrainParams::default() -> TrainParams {
     cat_smooth: 10.0,
     cat_l2: 10.0,
     min_data_per_group: 100.0,
+    subsample: 1.0,
+    colsample_bytree: 1.0,
+    colsample_bynode: 1.0,
+    seed: 0,
   }
 }
 
@@ -572,6 +584,94 @@ priv struct Grower {
   leaf_at : I32s
   nbins : Int32 // total histogram slots: per feature, missing + (cuts + 1)
   hist_start : FixedArray[Int32]
+  // splitmix64 state for row and feature sampling
+  mut rng : UInt64
+  // features the current tree (tree_feats[0 ..< tree_n]) and node may use
+  tree_feats : FixedArray[Int32]
+  mut tree_n : Int32
+  node_on : FixedArray[Bool]
+}
+
+///|
+/// The next splitmix64 output.
+fn Grower::next(self : Grower) -> UInt64 {
+  self.rng = self.rng + 0x9E3779B97F4A7C15UL
+  let mut z = self.rng
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL
+  z ^ (z >> 31)
+}
+
+///|
+/// Uniform in [0, 1).
+fn Grower::uniform(self : Grower) -> Double {
+  (self.next() >> 11).to_double() * 1.1102230246251565e-16
+}
+
+///|
+/// Moves `k` of feats[0 ..< m], drawn uniformly, to the front.
+fn Grower::draw(
+  self : Grower,
+  feats : FixedArray[Int32],
+  m : Int32,
+  k : Int32,
+) -> Unit {
+  for i in 0..<k {
+    let j = i + (self.uniform() * (m - i).to_double()).to_int()
+    let j = if j >= m { m - 1 } else { j }
+    let x = feats[i]
+    feats[i] = feats[j]
+    feats[j] = x
+  }
+}
+
+///|
+/// How many of m features a fraction keeps: at least one.
+fn sample_count(m : Int32, frac : Double) -> Int32 {
+  let k = (frac * m.to_double()).to_int()
+  if k < 1 {
+    1
+  } else if k > m {
+    m
+  } else {
+    k
+  }
+}
+
+///|
+/// Picks the features of a new tree.
+fn Grower::sample_tree(self : Grower) -> Unit {
+  let m = self.data.cols
+  for f in 0..<m {
+    self.tree_feats[f] = f
+  }
+  if self.p.colsample_bytree < 1.0 {
+    let k = sample_count(m, self.p.colsample_bytree)
+    self.draw(self.tree_feats, m, k)
+    self.tree_n = k
+  } else {
+    self.tree_n = m
+  }
+}
+
+///|
+/// Marks the features a node may split on in node_on.
+fn Grower::sample_node(self : Grower) -> Unit {
+  let on = self.node_on
+  for f in 0..<on.length() {
+    on[f] = false
+  }
+  let m = self.tree_n
+  let k = if self.p.colsample_bynode < 1.0 {
+    let k = sample_count(m, self.p.colsample_bynode)
+    self.draw(self.tree_feats, m, k)
+    k
+  } else {
+    m
+  }
+  for i in 0..<k {
+    on[self.tree_feats[i]] = true
+  }
 }
 
 ///|
@@ -668,7 +768,14 @@ fn Grower::best_split(
   let mcw = self.p.min_child_weight
   let mut best : Split? = None
   let mut best_gain = self.p.gamma
+  let sampled = self.p.colsample_bytree < 1.0 || self.p.colsample_bynode < 1.0
+  if sampled {
+    self.sample_node()
+  }
   for f in 0..<self.data.cols {
+    if sampled && !self.node_on[f] {
+      continue
+    }
     // slot hist_start[f] holds the feature's missing values, then its bins
     let start = self.hist_start[f] + 1
     let n = self.data.cut_start[f + 1] - self.data.cut_start[f] + 1
@@ -1896,6 +2003,10 @@ fn train_json(
     leaf_at: i32s_make(n),
     nbins: hist_start[data.cols],
     hist_start,
+    rng: p.seed.to_int64().reinterpret_as_uint64(),
+    tree_feats: FixedArray::makei(data.cols, i => i),
+    tree_n: data.cols,
+    node_on: FixedArray::make(data.cols, true),
   }
   // margins accumulate in float32, as XGBoost predicts
   let margin = FixedArray::make(n * groups, Float::from_double(base_margin))
@@ -1966,6 +2077,21 @@ fn train_json(
         gsum = g
         hsum = h
       }
+      if p.subsample < 1.0 {
+        // rows left out of this tree keep their place with zero gradients
+        let gh = gr.gh
+        let gq = gr.gq
+        for r in 0..<n {
+          if gr.uniform() >= p.subsample {
+            gsum -= gh.unsafe_get(r * 2).to_double()
+            hsum -= gh.unsafe_get(r * 2 + 1).to_double()
+            gh.unsafe_set(r * 2, 0.0)
+            gh.unsafe_set(r * 2 + 1, 0.0)
+            q_zero(gq, r)
+          }
+        }
+      }
+      gr.sample_tree()
       let tree = GrowTree::new()
       let root = tree.add(-1, gr.weight(gsum, hsum), hsum)
       let hist = gr.histogram(0, n, 0, 0)

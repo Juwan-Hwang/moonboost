@@ -196,3 +196,29 @@ test "categorical columns must hold category codes" {
   }
   assert_eq(ok, "error")
 }
+
+///|
+test "row and feature sampling: seeded, and every tree still loads" {
+  let (x, y) = toy(3000)
+  let base = {
+    ..@moonboost.TrainParams::default(),
+    num_round: 8,
+    max_depth: 4,
+  }
+  let plain = @moonboost.train_xgboost_json(x, y, params=base)
+  let sampled = {
+    ..base,
+    subsample: 0.7,
+    colsample_bytree: 0.8,
+    colsample_bynode: 0.5,
+    seed: 3,
+  }
+  let a = @moonboost.train_xgboost_json(x, y, params=sampled)
+  let b = @moonboost.train_xgboost_json(x, y, params=sampled)
+  let c = @moonboost.train_xgboost_json(x, y, params={ ..sampled, seed: 4, })
+  assert_eq(a, b)
+  assert_true(a != plain)
+  assert_true(a != c)
+  let model = @moonboost.Model::from_xgboost_json(a)
+  assert_eq(model.predict_batch(x).length(), 3000)
+}

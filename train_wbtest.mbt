@@ -35,32 +35,38 @@ test "sorted_column matches a comparison sort" {
 ///|
 test "one-byte and two-byte copied bins train the same model" {
   // a few thousand rows, some features with missing values, deep enough
-  // for subtrees to be copied
+  // for subtrees to be copied; feature counts that fill one, two and
+  // three row words fully and partly
   let rows = 3000
-  let cols = 3
-  let data = Array::make(rows * cols, (0.0 : Float))
-  let label = Array::make(rows, (0.0 : Float))
-  let mut seed = 12345
-  for r in 0..<rows {
-    for f in 0..<cols {
-      seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
-      let v = (seed % 1000).to_double() / 10.0
-      data[r * cols + f] = if f == 2 && seed % 7 == 0 {
-        Float::from_double(0.0 / 0.0)
-      } else {
-        Float::from_double(v)
+  for cols in [3, 8, 10, 15, 16, 20] {
+    let data = Array::make(rows * cols, (0.0 : Float))
+    let label = Array::make(rows, (0.0 : Float))
+    let mut seed = 12345
+    for r in 0..<rows {
+      for f in 0..<cols {
+        seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
+        let v = (seed % 1000).to_double() / 10.0
+        data[r * cols + f] = if f == 2 && seed % 7 == 0 {
+          Float::from_double(0.0 / 0.0)
+        } else {
+          Float::from_double(v)
+        }
       }
+      let x = data[r * cols].to_double() +
+        data[r * cols + 1].to_double() +
+        data[r * cols + cols - 1].to_double() * 0.5
+      label[r] = if x > 125.0 { 1.0 } else { 0.0 }
     }
-    let x = data[r * cols].to_double() + data[r * cols + 1].to_double()
-    label[r] = if x > 100.0 { 1.0 } else { 0.0 }
+    let m = DenseMatrix::new(data, cols~)
+    let p = {
+      ..TrainParams::default(),
+      objective: "binary:logistic",
+      max_depth: 6,
+      num_round: 3,
+      max_bin: 64,
+    }
+    assert_eq(train_json(m, label, p, true), train_json(m, label, p, false))
+    let lg = { ..p, grow_policy: "lossguide", max_depth: 0, max_leaves: 40, }
+    assert_eq(train_json(m, label, lg, true), train_json(m, label, lg, false))
   }
-  let m = DenseMatrix::new(data, cols~)
-  let p = {
-    ..TrainParams::default(),
-    objective: "binary:logistic",
-    max_depth: 6,
-    num_round: 3,
-    max_bin: 64,
-  }
-  assert_eq(train_json(m, label, p, true), train_json(m, label, p, false))
 }

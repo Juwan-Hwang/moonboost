@@ -294,6 +294,15 @@ fn bin_code(v : Float, k : Int32) -> UInt16 {
 /// The up to `cap` values that occur most often in sorted `vals` (ties to
 /// the smaller value), in increasing order.
 fn frequent_values(vals : FixedArray[Float], cap : Int32) -> Array[Float] {
+  frequent_cover(vals, cap).0
+}
+
+///|
+/// frequent_values with the number of values they cover.
+fn frequent_cover(
+  vals : FixedArray[Float],
+  cap : Int32,
+) -> (Array[Float], Int32) {
   let distinct : Array[Float] = []
   let counts : Array[Int32] = []
   for i, v in vals {
@@ -305,7 +314,7 @@ fn frequent_values(vals : FixedArray[Float], cap : Int32) -> Array[Float] {
     }
   }
   if distinct.length() <= cap {
-    return distinct
+    return (distinct, vals.length())
   }
   let idx = Array::makei(distinct.length(), i => i)
   idx.sort_by((a, b) => {
@@ -316,8 +325,12 @@ fn frequent_values(vals : FixedArray[Float], cap : Int32) -> Array[Float] {
     }
   })
   let keep = idx[:cap].to_owned()
+  let mut covered = 0
+  for i in keep {
+    covered += counts[i]
+  }
   keep.sort()
-  keep.map(i => distinct[i])
+  (keep.map(i => distinct[i]), covered)
 }
 
 ///|
@@ -326,6 +339,7 @@ fn bin_matrix(
   max_bin : Int32,
   is_cat : FixedArray[Bool],
   cat_cap : Int32,
+  cat_room : Int32,
 ) -> Binned {
   let rows = m.rows
   let cols = m.cols
@@ -343,8 +357,17 @@ fn bin_matrix(
     }
     if is_cat[f] {
       // a bin for each of the cat_cap most frequent categories, in
-      // increasing order; the others share bin 0 with missing values
-      let kept = frequent_values(vals, cat_cap)
+      // increasing order; the others share bin 0 with missing values.
+      // When those leave more than 1% of the rows in bin 0, as many as
+      // the slots allow (cat_room) instead: a long tail of categories
+      // holds information that merging it with missing values loses
+      let (kept, covered) = frequent_cover(vals, cat_cap)
+      let kept = if cat_room > cat_cap &&
+        covered.to_double() < 0.99 * n.to_double() {
+        frequent_values(vals, cat_room)
+      } else {
+        kept
+      }
       if kept.length() > 0 {
         lowest[f] = kept[0]
       }
@@ -1771,7 +1794,8 @@ fn train_json(
   }
   // categories kept per categorical feature: the max_bin - 1 most
   // frequent (bin 0 holds missing values and the rest), fewer when the
-  // histogram slots (UInt16) would run out
+  // histogram slots (UInt16) would run out, or up to the slots' share
+  // (cat_room) when those cover under 99% of the rows
   let ncat = p.categorical.length()
   let room = 65535 - 2 * data.cols - (data.cols - ncat) * p.max_bin
   let cat_cap = if ncat == 0 {
@@ -1784,7 +1808,8 @@ fn train_json(
   if ncat > 0 && cat_cap < 2 {
     raise InvalidModel("too many features times bins for training")
   }
-  let binned = bin_matrix(data, p.max_bin, is_cat, cat_cap)
+  let cat_room = if ncat == 0 { 0 } else { room / ncat }
+  let binned = bin_matrix(data, p.max_bin, is_cat, cat_cap, cat_room)
   // histogram slots are stored as UInt16
   if binned.cuts.length() + 2 * data.cols > 65535 {
     raise InvalidModel("too many features times bins for training")

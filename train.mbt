@@ -24,11 +24,24 @@ pub(all) struct TrainParams {
   gamma : Double
   min_child_weight : Double
   max_bin : Int32
+  /// `depthwise` grows every node to `max_depth`; `lossguide` splits the
+  /// leaf with the largest gain first, up to `max_leaves` leaves
+  grow_policy : String
+  /// leaf limit for `lossguide` (0: none)
+  max_leaves : Int32
+  /// columns holding category codes (non-negative integers); a split on
+  /// one sends a set of categories one way
+  categorical : Array[Int32]
+  /// features with at most this many categories in a node split one
+  /// category against the rest
+  max_cat_to_onehot : Int32
+  /// most categories a partition split sends to the smaller side
+  max_cat_threshold : Int32
 }
 
 ///|
 /// XGBoost's defaults: squared error, 10 rounds, depth 6, eta 0.3,
-/// lambda 1, 256 bins.
+/// lambda 1, 256 bins, depth-wise growth, no categorical columns.
 pub fn TrainParams::default() -> TrainParams {
   {
     objective: "reg:squarederror",
@@ -40,6 +53,11 @@ pub fn TrainParams::default() -> TrainParams {
     gamma: 0.0,
     min_child_weight: 1.0,
     max_bin: 256,
+    grow_policy: "depthwise",
+    max_leaves: 0,
+    categorical: [],
+    max_cat_to_onehot: 4,
+    max_cat_threshold: 64,
   }
 }
 
@@ -59,6 +77,11 @@ priv struct Binned {
   cut_start : FixedArray[Int32]
   // whether feature f has a missing value
   missing : FixedArray[Bool]
+  // whether feature f holds categories; each of its values is a bin
+  is_cat : FixedArray[Bool]
+  // smallest value of feature f (the value of bin 1 of a categorical
+  // feature; bin k + 1 holds its cut k)
+  lowest : FixedArray[Float]
 }
 
 ///|
@@ -259,18 +282,33 @@ fn bin_code(v : Float, k : Int32) -> UInt16 {
 }
 
 ///|
-fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
+fn bin_matrix(
+  m : DenseMatrix,
+  max_bin : Int32,
+  is_cat : FixedArray[Bool],
+) -> Binned {
   let rows = m.rows
   let cols = m.cols
   let cuts : Array[Float] = []
   let cut_start = FixedArray::make(cols + 1, 0)
   let by_col = u16s_make(rows * cols)
   let missing = FixedArray::make(cols, false)
+  let lowest : FixedArray[Float] = FixedArray::make(cols, 0.0)
   for f in 0..<cols {
     let vals = sorted_column(m, f)
     let base = cuts.length()
     let n = vals.length()
     if n > 0 {
+      lowest[f] = vals[0]
+    }
+    if n > 0 && is_cat[f] {
+      // every category but the smallest opens a bin
+      for i in 1..<n {
+        if vals[i] != vals[i - 1] {
+          cuts.push(vals[i])
+        }
+      }
+    } else if n > 0 {
       // count distinct values
       let mut distinct = 1
       for i in 1..<n {
@@ -312,7 +350,16 @@ fn bin_matrix(m : DenseMatrix, max_bin : Int32) -> Binned {
       }
     }
   }
-  { cols, bins: u16s_make(0), by_col, cuts, cut_start, missing, }
+  {
+    cols,
+    bins: u16s_make(0),
+    by_col,
+    cuts,
+    cut_start,
+    missing,
+    is_cat,
+    lowest,
+  }
 }
 
 ///|
@@ -327,11 +374,14 @@ priv struct GrowTree {
   base_weight : Array[Float]
   loss_change : Array[Float]
   sum_hess : Array[Float]
+  // categorical splits: the sorted category codes that go right
+  cats : Array[Array[Int32]]
 }
 
 ///|
 fn GrowTree::new() -> GrowTree {
   {
+    cats: [],
     left: [],
     right: [],
     parent: [],
@@ -360,6 +410,7 @@ fn GrowTree::add(
   self.base_weight.push(Float::from_double(weight))
   self.loss_change.push(0.0)
   self.sum_hess.push(Float::from_double(hess))
+  self.cats.push([])
   self.left.length() - 1
 }
 
@@ -371,7 +422,25 @@ priv struct Split {
   default_left : Bool
   gl : Double
   hl : Double
+  // for a categorical split, whether each bin (1 .. categories; bin 0 is
+  // missing) goes right; empty for a numerical split
+  right : FixedArray[Bool]
 }
+
+///|
+let no_cats : FixedArray[Bool] = []
+
+///|
+/// Categorical splits: categories are sorted by g / (h + cat_smooth) for
+/// partition splits, which leave out categories with fewer than
+/// min_cat_rows rows (estimated from the hessian) and add cat_l2 to lambda.
+let cat_smooth : Double = 10.0
+
+///|
+let cat_l2 : Double = 10.0
+
+///|
+let min_cat_rows : Double = 100.0
 
 ///|
 priv struct Grower {
@@ -511,6 +580,7 @@ fn Grower::best_split(
   hist : Hist,
   g : Double,
   h : Double,
+  count : Int32,
 ) -> Split? {
   let parent = self.score(g, h)
   let mcw = self.p.min_child_weight
@@ -526,6 +596,16 @@ fn Grower::best_split(
     guard start + n - 1 <= hist_len(hist) else { abort("short histogram") }
     let mg = hist_g(hist, start - 1) * self.igs
     let mh = hist_h(hist, start - 1) * self.ihs
+    if self.data.is_cat[f] {
+      if self.cat_split(
+          hist, f, start, n, g, h, count, mg, mh, parent, best_gain,
+        )
+        is Some(s) {
+        best_gain = s.gain
+        best = Some(s)
+      }
+      continue
+    }
     // the quantised sums are integers below 2^53, exact in a Double
     let mut qg = 0.0
     let mut qh = 0.0
@@ -547,7 +627,15 @@ fn Grower::best_split(
         let gain = self.score(gl, hl) + self.score(gr, hr) - parent
         if gain > best_gain {
           best_gain = gain
-          best = Some({ gain, feature: f, bin: b, default_left: false, gl, hl, })
+          best = Some({
+            gain,
+            feature: f,
+            bin: b,
+            default_left: false,
+            gl,
+            hl,
+            right: no_cats,
+          })
         }
       }
       // missing values to the left
@@ -567,6 +655,7 @@ fn Grower::best_split(
               default_left: true,
               gl: gl2,
               hl: hl2,
+              right: no_cats,
             })
           }
         }
@@ -577,20 +666,180 @@ fn Grower::best_split(
 }
 
 ///|
+/// The best categorical split of feature f (categories in hist slots
+/// start ..< start + n) that gains more than best_gain: one category
+/// against the rest when the node has at most max_cat_to_onehot
+/// categories, else a set of categories taken from either end of their
+/// order by g / (h + cat_smooth). The set goes right; categories not in
+/// it, including ones unseen in training, go left.
+fn Grower::cat_split(
+  self : Grower,
+  hist : Hist,
+  f : Int32,
+  start : Int32,
+  n : Int32,
+  g : Double,
+  h : Double,
+  count : Int32,
+  mg : Double,
+  mh : Double,
+  parent : Double,
+  best_gain : Double,
+) -> Split? {
+  let mcw = self.p.min_child_weight
+  let ids : Array[Int32] = []
+  let cg : Array[Double] = []
+  let ch : Array[Double] = []
+  for b in 0..<n {
+    let bg = hist_g(hist, start + b) * self.igs
+    let bh = hist_h(hist, start + b) * self.ihs
+    if bh > 0.0 || bg != 0.0 {
+      ids.push(b)
+      cg.push(bg)
+      ch.push(bh)
+    }
+  }
+  let k = ids.length()
+  if k < 2 {
+    return None
+  }
+  let mut best_gain = best_gain
+  // the best right set: ids at order[lo ..< hi]
+  let mut best_lo = -1
+  let mut best_hi = -1
+  let mut best_dl = false
+  let mut best_gl = 0.0
+  let mut best_hl = 0.0
+  let order : Array[Int32] = []
+  let onehot = k <= self.p.max_cat_to_onehot
+  let lam = if onehot { 0.0 } else { cat_l2 }
+  // try right sums (gr, hr) with missing left and right
+  let try_set = fn(gr : Double, hr : Double, lo : Int32, hi : Int32) {
+    for dl in 0..<2 {
+      if dl == 0 && mh == 0.0 {
+        continue
+      }
+      // dl 1: missing left (in the rest); dl 0: missing right
+      let (gr2, hr2) = if dl == 1 { (gr, hr) } else { (gr + mg, hr + mh) }
+      let gl = g - gr2
+      let hl = h - hr2
+      if hl >= mcw && hr2 >= mcw {
+        let gain = gl * gl / (hl + self.p.lambda + lam) +
+          gr2 * gr2 / (hr2 + self.p.lambda + lam) -
+          parent
+        if gain > best_gain {
+          best_gain = gain
+          best_lo = lo
+          best_hi = hi
+          best_dl = dl == 1
+          best_gl = gl
+          best_hl = hl
+        }
+      }
+    }
+  }
+  if onehot {
+    for i in 0..<k {
+      order.push(i)
+    }
+    for i in 0..<k {
+      try_set(cg[i], ch[i], i, i + 1)
+    }
+  } else {
+    // categories with enough rows, by their mean gradient
+    let per_row = h / count.to_double()
+    for i in 0..<k {
+      if ch[i] >= min_cat_rows * per_row {
+        order.push(i)
+      }
+    }
+    let m = order.length()
+    if m < 2 {
+      return None
+    }
+    order.sort_by_key(i => cg[i] / (ch[i] + cat_smooth))
+    let limit = if m - 1 < self.p.max_cat_threshold {
+      m - 1
+    } else {
+      self.p.max_cat_threshold
+    }
+    let mut gr = 0.0
+    let mut hr = 0.0
+    for j in 0..<limit {
+      gr += cg[order[j]]
+      hr += ch[order[j]]
+      try_set(gr, hr, 0, j + 1)
+    }
+    gr = 0.0
+    hr = 0.0
+    for j in 0..<limit {
+      gr += cg[order[m - 1 - j]]
+      hr += ch[order[m - 1 - j]]
+      try_set(gr, hr, m - 1 - j, m)
+    }
+  }
+  if best_lo < 0 {
+    return None
+  }
+  // bin b + 1 holds category b; bin 0 is missing
+  let right = FixedArray::make(n + 1, false)
+  for j in best_lo..<best_hi {
+    right[ids[order[j]] + 1] = true
+  }
+  Some({
+    gain: best_gain,
+    feature: f,
+    bin: 0,
+    default_left: best_dl,
+    gl: best_gl,
+    hl: best_hl,
+    right,
+  })
+}
+
+///|
 /// For one-byte bins: whether each byte of the split feature goes left
 /// (1) or right (0).
 fn Grower::left_table(self : Grower, s : Split) -> FixedArray[Int32] {
-  let limit = s.bin + 1
-  let miss = if s.default_left { 0 } else { 1 << 20 }
   let add = self.cbase[s.feature] - self.hist_start[s.feature]
-  FixedArray::makei(256, fn(byte) {
-    let bin = byte + add
+  FixedArray::makei(256, fn(byte) { self.goes_left(s, byte + add) })
+}
+
+///|
+/// Whether a row in bin `bin` of the split feature (0: missing) goes left:
+/// 1 or 0.
+fn Grower::goes_left(self : Grower, s : Split, bin : Int32) -> Int32 {
+  ignore(self)
+  if s.right.length() > 0 {
+    if bin == 0 {
+      if s.default_left {
+        1
+      } else {
+        0
+      }
+    } else if bin < s.right.length() && s.right[bin] {
+      0
+    } else {
+      1
+    }
+  } else {
+    let miss = if s.default_left { 0 } else { 1 << 20 }
     let key = bin + (((bin - 1) >> 31) & miss)
-    if key <= limit {
+    if key <= s.bin + 1 {
       1
     } else {
       0
     }
+  }
+}
+
+///|
+/// goes_left for every bin of the split feature: index 0 (missing) to the
+/// feature's last bin.
+fn Grower::bin_table(self : Grower, s : Split) -> FixedArray[Int32] {
+  let f = s.feature
+  FixedArray::makei(self.hist_start[f + 1] - self.hist_start[f], fn(bin) {
+    self.goes_left(s, bin)
   })
 }
 
@@ -655,6 +904,18 @@ fn Grower::partition(
     } else {
       (self.data.by_col, 1, s.feature * self.gh.length() / 2, 0)
     }
+    if s.right.length() > 0 {
+      let go = self.bin_table(s)
+      for i in lo..<hi {
+        let r = rows.unsafe_get(i)
+        let left = go[bins.unsafe_get(r * stride + column).to_int() - sub]
+        dst.unsafe_set(a, r)
+        dst.unsafe_set(b, r)
+        a += left
+        b -= 1 - left
+      }
+      return a
+    }
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
       let bin = bins.unsafe_get(r * stride + column).to_int() - sub
@@ -667,6 +928,24 @@ fn Grower::partition(
     }
   }
   a
+}
+
+///|
+/// The category codes a categorical split sends right, in increasing order.
+fn Grower::right_codes(self : Grower, s : Split) -> Array[Int32] {
+  let f = s.feature
+  let out = []
+  for bin in 1..<s.right.length() {
+    if s.right[bin] {
+      let v = if bin == 1 {
+        self.data.lowest[f]
+      } else {
+        self.data.cuts[self.data.cut_start[f] + bin - 2]
+      }
+      out.push(v.to_int())
+    }
+  }
+  out
 }
 
 ///|
@@ -730,11 +1009,13 @@ fn Grower::partition_copy(
     let bins = self.data.bins
     let tw = self.cbins16[0]
     let column = s.feature * n
+    let cat = s.right.length() > 0
+    let go = if cat { self.bin_table(s) } else { FixedArray::make(0, 0) }
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
       let bin = by_col.unsafe_get(r + column).to_int()
       let key = bin + (((bin - 1) >> 31) & miss)
-      let left = if key <= limit { 1 } else { 0 }
+      let left = if cat { go[bin] } else if key <= limit { 1 } else { 0 }
       let p = b + (a - b) * left
       let src = r * cols
       let at = p * cols
@@ -753,6 +1034,250 @@ fn Grower::partition_copy(
     dst.unsafe_set(i, i)
   }
   a
+}
+
+///|
+/// Makes node a leaf of rows[lo:hi]: its value from the rows' exact
+/// gradient sums, and leaf_at (and orig[0] above the copy depth) for
+/// adding it to the margins.
+fn Grower::finish_leaf(
+  self : Grower,
+  tree : GrowTree,
+  node : Int32,
+  lo : Int32,
+  hi : Int32,
+  level : Int32,
+) -> Unit {
+  let mut eg = 0.0
+  let mut eh = 0.0
+  let gh = if level > 0 { self.cgh[level - 1] } else { self.gh }
+  let rows = self.rows
+  let leaf_at = self.leaf_at
+  // indices are in range: rows[lo:hi] are rows or copied positions
+  // positions in rows[lo:hi] are those of one copy level (there is at
+  // most one); a leaf above it is given the positions lo..hi, which no
+  // copied subtree uses
+  if level > 0 {
+    for i in lo..<hi {
+      let r = rows.unsafe_get(i)
+      eg += gh.unsafe_get(r * 2).to_double()
+      eh += gh.unsafe_get(r * 2 + 1).to_double()
+      leaf_at.unsafe_set(r, node)
+    }
+  } else {
+    let o = self.orig[0]
+    for i in lo..<hi {
+      let r = rows.unsafe_get(i)
+      eg += gh.unsafe_get(r * 2).to_double()
+      eh += gh.unsafe_get(r * 2 + 1).to_double()
+      o.unsafe_set(i, r)
+      leaf_at.unsafe_set(i, node)
+    }
+  }
+  let leaf = Float::from_double(self.weight(eg, eh) * self.p.eta)
+  tree.split_cond[node] = leaf
+}
+
+///|
+/// Sets node's split in the tree and adds its two children; returns them.
+fn Grower::add_split(
+  self : Grower,
+  tree : GrowTree,
+  node : Int32,
+  s : Split,
+  g : Double,
+  h : Double,
+) -> (Int32, Int32) {
+  let gr = g - s.gl
+  let hr = h - s.hl
+  let l = tree.add(node, self.weight(s.gl, s.hl), s.hl)
+  let r = tree.add(node, self.weight(gr, hr), hr)
+  tree.left[node] = l
+  tree.right[node] = r
+  tree.split_index[node] = s.feature
+  if s.right.length() > 0 {
+    tree.split_cond[node] = 0.0
+    tree.cats[node] = self.right_codes(s)
+  } else {
+    tree.split_cond[node] = self.data.cuts[self.data.cut_start[s.feature] +
+      s.bin]
+  }
+  tree.default_left[node] = s.default_left
+  tree.loss_change[node] = Float::from_double(s.gain)
+  (l, r)
+}
+
+///|
+/// A leaf waiting to be split by loss-guided growth.
+priv struct Pending {
+  node : Int32
+  lo : Int32
+  hi : Int32
+  hist : Hist
+  slot : Int32 // which histogram buffer holds hist
+  g : Double
+  h : Double
+  depth : Int32
+  level : Int32
+  split : Split?
+}
+
+///|
+/// Loss-guided growth: repeatedly splits the leaf whose best split gains
+/// the most, until max_leaves leaves (when set) or no split gains.
+fn Grower::grow_lossguide(
+  self : Grower,
+  tree : GrowTree,
+  n : Int32,
+  hist : Hist,
+  g : Double,
+  h : Double,
+) -> Unit {
+  let max_depth = self.p.max_depth
+  let can_split = fn(depth : Int32, lo : Int32, hi : Int32) {
+    (max_depth <= 0 || depth < max_depth) && hi - lo >= 2
+  }
+  let pending : Array[Pending] = [
+    {
+      node: 0,
+      lo: 0,
+      hi: n,
+      hist,
+      slot: 0,
+      g,
+      h,
+      depth: 0,
+      level: 0,
+      split: if can_split(0, 0, n) {
+        self.best_split(hist, g, h, n)
+      } else {
+        None
+      },
+    },
+  ]
+  // histogram buffers not in use (JS reuses a buffer per slot)
+  let free : Array[Int32] = []
+  let mut slots = 1
+  let mut leaves = 1
+  while self.p.max_leaves <= 0 || leaves < self.p.max_leaves {
+    let mut best = -1
+    let mut best_gain = 0.0
+    for i, p in pending {
+      if p.split is Some(s) && (best < 0 || s.gain > best_gain) {
+        best = i
+        best_gain = s.gain
+      }
+    }
+    if best < 0 {
+      break
+    }
+    let p = pending[best]
+    pending[best] = pending[pending.length() - 1]
+    ignore(pending.pop())
+    guard p.split is Some(s) else { abort("pending leaf without split") }
+    let lo = p.lo
+    let hi = p.hi
+    let depth = p.depth
+    let level = p.level
+    let copy = level == 0 &&
+      self.compact_at.length() > 0 &&
+      depth + 1 == self.compact_at[0]
+    let mid = if copy {
+      self.partition_copy(lo, hi, s)
+    } else {
+      self.partition(lo, hi, s, level)
+    }
+    // the children's rows are in scratch[lo:hi]
+    let rows = self.rows
+    let scratch = self.scratch
+    for i in lo..<hi {
+      rows.unsafe_set(i, scratch.unsafe_get(i))
+    }
+    let level = if copy { 1 } else { level }
+    let (l, r) = self.add_split(tree, p.node, s, p.g, p.h)
+    leaves += 1
+    let gr = p.g - s.gl
+    let hr = p.h - s.hl
+    let dl = depth + 1
+    let split_l = can_split(dl, lo, mid)
+    let split_r = can_split(dl, mid, hi)
+    if !split_l && !split_r {
+      free.push(p.slot)
+      pending.push({
+        ..p,
+        node: l,
+        hi: mid,
+        g: s.gl,
+        h: s.hl,
+        depth: dl,
+        level,
+        split: None,
+      })
+      pending.push({
+        ..p,
+        node: r,
+        lo: mid,
+        g: gr,
+        h: hr,
+        depth: dl,
+        level,
+        split: None,
+      })
+      continue
+    }
+    let small_left = mid - lo <= hi - mid
+    let (small_lo, small_hi) = if small_left { (lo, mid) } else { (mid, hi) }
+    let slot = match free.pop() {
+      Some(x) => x
+      None => {
+        slots += 1
+        slots - 1
+      }
+    }
+    let small = self.histogram(small_lo, small_hi, level, 1 + slot)
+    // the parent's histogram becomes the larger child's
+    hist_sub(p.hist, small)
+    let (hl_hist, sl, hr_hist, sr) = if small_left {
+      (small, slot, p.hist, p.slot)
+    } else {
+      (p.hist, p.slot, small, slot)
+    }
+    pending.push({
+      node: l,
+      lo,
+      hi: mid,
+      hist: hl_hist,
+      slot: sl,
+      g: s.gl,
+      h: s.hl,
+      depth: dl,
+      level,
+      split: if split_l {
+        self.best_split(hl_hist, s.gl, s.hl, mid - lo)
+      } else {
+        None
+      },
+    })
+    pending.push({
+      node: r,
+      lo: mid,
+      hi,
+      hist: hr_hist,
+      slot: sr,
+      g: gr,
+      h: hr,
+      depth: dl,
+      level,
+      split: if split_r {
+        self.best_split(hr_hist, gr, hr, hi - mid)
+      } else {
+        None
+      },
+    })
+  }
+  for p in pending {
+    self.finish_leaf(tree, p.node, p.lo, p.hi, p.level)
+  }
 }
 
 ///|
@@ -777,42 +1302,12 @@ fn Grower::grow(
     level
   }
   let split = if depth < self.p.max_depth && hi - lo >= 2 {
-    self.best_split(hist, g, h)
+    self.best_split(hist, g, h, hi - lo)
   } else {
     None
   }
   match split {
-    None => {
-      // leaf values use the exact gradient sums
-      let mut eg = 0.0
-      let mut eh = 0.0
-      let gh = if level > 0 { self.cgh[level - 1] } else { self.gh }
-      let rows = self.rows
-      let leaf_at = self.leaf_at
-      // indices are in range: rows[lo:hi] are rows or copied positions
-      // positions in rows[lo:hi] are those of one copy level (there is at
-      // most one); a leaf above it is given the positions lo..hi, which no
-      // copied subtree uses
-      if level > 0 {
-        for i in lo..<hi {
-          let r = rows.unsafe_get(i)
-          eg += gh.unsafe_get(r * 2).to_double()
-          eh += gh.unsafe_get(r * 2 + 1).to_double()
-          leaf_at.unsafe_set(r, node)
-        }
-      } else {
-        let o = self.orig[0]
-        for i in lo..<hi {
-          let r = rows.unsafe_get(i)
-          eg += gh.unsafe_get(r * 2).to_double()
-          eh += gh.unsafe_get(r * 2 + 1).to_double()
-          o.unsafe_set(i, r)
-          leaf_at.unsafe_set(i, node)
-        }
-      }
-      let leaf = Float::from_double(self.weight(eg, eh) * self.p.eta)
-      tree.split_cond[node] = leaf
-    }
+    None => self.finish_leaf(tree, node, lo, hi, level)
     Some(s) => {
       // a node just above the copy depth partitions its rows straight
       // into the copy, reading each row once in row order
@@ -833,15 +1328,7 @@ fn Grower::grow(
       let hl = s.hl
       let gr = g - gl
       let hr = h - hl
-      let l = tree.add(node, self.weight(gl, hl), hl)
-      let r = tree.add(node, self.weight(gr, hr), hr)
-      tree.left[node] = l
-      tree.right[node] = r
-      tree.split_index[node] = s.feature
-      tree.split_cond[node] = self.data.cuts[self.data.cut_start[s.feature] +
-        s.bin]
-      tree.default_left[node] = s.default_left
-      tree.loss_change[node] = Float::from_double(s.gain)
+      let (l, r) = self.add_split(tree, node, s, g, h)
       // children at the depth limit become leaves and need no histogram;
       // otherwise build the smaller child's and derive the other's
       let (hl_hist, hr_hist) = if depth + 1 >= self.p.max_depth {
@@ -913,9 +1400,27 @@ fn tree_json(
   let n = t.left.length()
   buf.write_string("{\"base_weights\":")
   json_floats(buf, t.base_weight)
-  buf.write_string(
-    ",\"categories\":[],\"categories_nodes\":[],\"categories_segments\":[],\"categories_sizes\":[],\"default_left\":",
-  )
+  let cats : Array[Int32] = []
+  let cat_nodes : Array[Int32] = []
+  let segments : Array[Int32] = []
+  let sizes : Array[Int32] = []
+  for i, c in t.cats {
+    if c.length() > 0 {
+      cat_nodes.push(i)
+      segments.push(cats.length())
+      sizes.push(c.length())
+      cats.append(c)
+    }
+  }
+  buf.write_string(",\"categories\":")
+  json_ints(buf, cats)
+  buf.write_string(",\"categories_nodes\":")
+  json_ints(buf, cat_nodes)
+  buf.write_string(",\"categories_segments\":")
+  json_ints(buf, segments)
+  buf.write_string(",\"categories_sizes\":")
+  json_ints(buf, sizes)
+  buf.write_string(",\"default_left\":")
   json_ints(buf, t.default_left.map(b => if b { 1 } else { 0 }))
   buf.write_string(",\"id\":\{id},\"left_children\":")
   json_ints(buf, t.left)
@@ -930,7 +1435,7 @@ fn tree_json(
   buf.write_string(",\"split_indices\":")
   json_ints(buf, t.split_index)
   buf.write_string(",\"split_type\":")
-  json_ints(buf, Array::make(n, 0))
+  json_ints(buf, t.cats.map(c => if c.length() > 0 { 1 } else { 0 }))
   buf.write_string(",\"sum_hessian\":")
   json_floats(buf, t.sum_hess)
   buf.write_string(
@@ -1042,7 +1547,11 @@ fn train_json(
   if n == 0 {
     raise InvalidModel("no training rows")
   }
-  if p.max_bin < 2 || p.max_bin > 65535 || p.max_depth < 1 || p.num_round < 0 {
+  if p.max_bin < 2 ||
+    p.max_bin > 65535 ||
+    p.max_depth < 0 ||
+    (p.max_depth == 0 && p.grow_policy != "lossguide") ||
+    p.num_round < 0 {
     raise InvalidModel("bad training parameters")
   }
   let groups = match p.objective {
@@ -1102,11 +1611,30 @@ fn train_json(
     "binary:logistic" => 1
     _ => 2
   }
+  let is_cat = FixedArray::make(data.cols, false)
+  for f in p.categorical {
+    if f < 0 || f >= data.cols {
+      raise InvalidModel("categorical column \{f} out of range")
+    }
+    is_cat[f] = true
+    for r in 0..<n {
+      let v = data.data[r * data.cols + f]
+      if !v.is_nan() &&
+        (v < 0.0 || v >= 16777216.0 || Float::from_int(v.to_int()) != v) {
+        raise InvalidModel(
+          "column \{f} is categorical but row \{r} holds \{v}, not a category code",
+        )
+      }
+    }
+  }
+  if p.grow_policy != "depthwise" && p.grow_policy != "lossguide" {
+    raise InvalidModel("grow_policy must be depthwise or lossguide")
+  }
+  let binned = bin_matrix(data, p.max_bin, is_cat)
   // histogram slots are stored as UInt16
-  if data.cols * (p.max_bin + 1) > 65535 {
+  if binned.cuts.length() + 2 * data.cols > 65535 {
     raise InvalidModel("too many features times bins for training")
   }
-  let binned = bin_matrix(data, p.max_bin)
   let hist_start = FixedArray::make(data.cols + 1, 0)
   for f in 0..<data.cols {
     hist_start[f + 1] = hist_start[f] +
@@ -1270,7 +1798,11 @@ fn train_json(
         qg = qg + hist_g(hist, slot)
         qh = qh + hist_h(hist, slot)
       }
-      gr.grow(tree, root, 0, n, hist, qg * gr.igs, qh * gr.ihs, 0, 0)
+      if p.grow_policy == "lossguide" {
+        gr.grow_lossguide(tree, n, hist, qg * gr.igs, qh * gr.ihs)
+      } else {
+        gr.grow(tree, root, 0, n, hist, qg * gr.igs, qh * gr.ihs, 0, 0)
+      }
       let leaves = FixedArray::from_array(tree.split_cond)
       for lo = 0; lo < n; lo = lo + block {
         add_leaves(

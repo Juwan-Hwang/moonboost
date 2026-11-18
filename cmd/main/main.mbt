@@ -20,6 +20,9 @@ const USAGE : String =
   #|  --objective reg:squarederror | binary:logistic | multi:softprob | multi:softmax
   #|  --num-class K  --rounds 10  --depth 6  --eta 0.3  --lambda 1
   #|  --gamma 0  --min-child-weight 1  --max-bin 256  --header
+  #|  --categorical 0,3,4  (columns of category codes)
+  #|  --max-cat-to-onehot 4  --max-cat-threshold 64
+  #|  --grow-policy depthwise | lossguide  --max-leaves 0
   #|labels.csv holds one label per line. The model is written as XGBoost JSON.
   #|
   #|Models are XGBoost JSON files (Booster.save_model("model.json")) or
@@ -281,6 +284,19 @@ fn train(args : ArrayView[String]) -> Unit raise {
       "--gamma" => p = { ..p, gamma: num(), }
       "--min-child-weight" => p = { ..p, min_child_weight: num(), }
       "--max-bin" => p = { ..p, max_bin: @string.parse_int(next()), }
+      "--grow-policy" => p = { ..p, grow_policy: next(), }
+      "--max-leaves" => p = { ..p, max_leaves: @string.parse_int(next()), }
+      "--categorical" => {
+        let cols = []
+        for c in next().split(",") {
+          cols.push(@string.parse_int(c))
+        }
+        p = { ..p, categorical: cols, }
+      }
+      "--max-cat-to-onehot" =>
+        p = { ..p, max_cat_to_onehot: @string.parse_int(next()), }
+      "--max-cat-threshold" =>
+        p = { ..p, max_cat_threshold: @string.parse_int(next()), }
       _ => {
         if a.has_prefix("-") {
           raise CliError("unknown option \{a}")

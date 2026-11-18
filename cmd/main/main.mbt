@@ -295,11 +295,6 @@ fn train(args : ArrayView[String]) -> Unit raise {
       }
       "--max-cat-to-onehot" =>
         p = { ..p, max_cat_to_onehot: @string.parse_int(next()), }
-      "--cat-crossfit" => {
-        p = { ..p, cat_crossfit: true, }
-        i += 1
-        continue
-      }
       "--max-cat-threshold" =>
         p = { ..p, max_cat_threshold: @string.parse_int(next()), }
       _ => {

@@ -37,9 +37,6 @@ pub(all) struct TrainParams {
   max_cat_to_onehot : Int32
   /// most categories a partition split sends to the smaller side
   max_cat_threshold : Int32
-  /// order categories for partition splits by one half of the node's rows
-  /// and score the splits on the other half
-  cat_crossfit : Bool
 }
 
 ///|
@@ -61,7 +58,6 @@ pub fn TrainParams::default() -> TrainParams {
     categorical: [],
     max_cat_to_onehot: 4,
     max_cat_threshold: 64,
-    cat_crossfit: false,
   }
 }
 
@@ -584,11 +580,8 @@ fn Grower::best_split(
   hist : Hist,
   g : Double,
   h : Double,
-  lo : Int32,
-  hi : Int32,
-  level : Int32,
+  count : Int32,
 ) -> Split? {
-  let count = hi - lo
   let parent = self.score(g, h)
   let mcw = self.p.min_child_weight
   let mut best : Split? = None
@@ -605,7 +598,7 @@ fn Grower::best_split(
     let mh = hist_h(hist, start - 1) * self.ihs
     if self.data.is_cat[f] {
       if self.cat_split(
-          hist, f, start, n, g, h, count, mg, mh, parent, best_gain, lo, hi, level,
+          hist, f, start, n, g, h, count, mg, mh, parent, best_gain,
         )
         is Some(s) {
         best_gain = s.gain
@@ -692,9 +685,6 @@ fn Grower::cat_split(
   mh : Double,
   parent : Double,
   best_gain : Double,
-  lo : Int32,
-  hi : Int32,
-  level : Int32,
 ) -> Split? {
   let mcw = self.p.min_child_weight
   let ids : Array[Int32] = []
@@ -767,11 +757,6 @@ fn Grower::cat_split(
     if m < 2 {
       return None
     }
-    if self.p.cat_crossfit {
-      return self.crossfit_split(
-        f, n, g, h, mg, mh, ids, cg, ch, order, best_gain, lo, hi, level,
-      )
-    }
     order.sort_by_key(i => cg[i] / (ch[i] + cat_smooth))
     let limit = if m - 1 < self.p.max_cat_threshold {
       m - 1
@@ -808,124 +793,6 @@ fn Grower::cat_split(
     default_left: best_dl,
     gl: best_gl,
     hl: best_hl,
-    right,
-  })
-}
-
-///|
-/// A partition split ordered on the node's even rows and scored on its odd
-/// rows, so the order's fit to the rows does not inflate the gain. The
-/// chosen set's gain is the odd rows' gain doubled. Missing values go left.
-fn Grower::crossfit_split(
-  self : Grower,
-  f : Int32,
-  n : Int32,
-  g : Double,
-  h : Double,
-  mg : Double,
-  mh : Double,
-  ids : Array[Int32],
-  cg : Array[Double],
-  ch : Array[Double],
-  order : Array[Int32],
-  best_gain : Double,
-  lo : Int32,
-  hi : Int32,
-  level : Int32,
-) -> Split? {
-  ignore(mg)
-  ignore(mh)
-  // gradient sums of the even rows per category bin
-  let eg = FixedArray::make(n + 1, 0.0)
-  let eh = FixedArray::make(n + 1, 0.0)
-  let rows = self.rows
-  let o = self.orig[0]
-  let nrows = self.leaf_at.length()
-  let by_col = self.data.by_col
-  let gh = self.gh
-  let base = f * nrows
-  for i in lo..<hi {
-    let p = rows.unsafe_get(i)
-    let r = if level > 0 { o.unsafe_get(p) } else { p }
-    if (r & 1) == 0 {
-      let b = by_col.unsafe_get(base + r).to_int()
-      eg[b] = eg[b] + gh.unsafe_get(r * 2).to_double()
-      eh[b] = eh[b] + gh.unsafe_get(r * 2 + 1).to_double()
-    }
-  }
-  let mut eg_all = 0.0
-  let mut eh_all = 0.0
-  for b in 0..<=n {
-    eg_all += eg[b]
-    eh_all += eh[b]
-  }
-  // odd sums are the node's less the even ones
-  let og = g - eg_all
-  let oh = h - eh_all
-  let lam = self.p.lambda / 2.0
-  let l2 = cat_l2 / 2.0
-  let mcw = self.p.min_child_weight
-  order.sort_by_key(i => eg[ids[i] + 1] / (eh[ids[i] + 1] + cat_smooth))
-  let m = order.length()
-  let limit = if m - 1 < self.p.max_cat_threshold {
-    m - 1
-  } else {
-    self.p.max_cat_threshold
-  }
-  let parent = og * og / (oh + lam)
-  let mut best_gain = best_gain
-  let mut best_lo = -1
-  let mut best_hi = -1
-  for dir in 0..<2 {
-    let mut rg = 0.0 // odd rows going right
-    let mut rh = 0.0
-    let mut fh = 0.0
-    for j in 0..<limit {
-      let i = if dir == 0 { order[j] } else { order[m - 1 - j] }
-      let b = ids[i] + 1
-      rg += cg[i] - eg[b]
-      rh += ch[i] - eh[b]
-      fh += ch[i]
-      if fh < mcw || h - fh < mcw || rh <= 0.0 || oh - rh <= 0.0 {
-        continue
-      }
-      let gain = 2.0 *
-        (
-          rg * rg / (rh + lam + l2) +
-          (og - rg) * (og - rg) / (oh - rh + lam + l2) -
-          parent
-        )
-      if gain > best_gain {
-        best_gain = gain
-        if dir == 0 {
-          best_lo = 0
-          best_hi = j + 1
-        } else {
-          best_lo = m - 1 - j
-          best_hi = m
-        }
-      }
-    }
-  }
-  if best_lo < 0 {
-    return None
-  }
-  let right = FixedArray::make(n + 1, false)
-  let mut gr = 0.0
-  let mut hr = 0.0
-  for j in best_lo..<best_hi {
-    let i = order[j]
-    right[ids[i] + 1] = true
-    gr += cg[i]
-    hr += ch[i]
-  }
-  Some({
-    gain: best_gain,
-    feature: f,
-    bin: 0,
-    default_left: true,
-    gl: g - gr,
-    hl: h - hr,
     right,
   })
 }
@@ -1282,7 +1149,7 @@ fn Grower::grow_lossguide(
       depth: 0,
       level: 0,
       split: if can_split(0, 0, n) {
-        self.best_split(hist, g, h, 0, n, 0)
+        self.best_split(hist, g, h, n)
       } else {
         None
       },
@@ -1386,7 +1253,7 @@ fn Grower::grow_lossguide(
       depth: dl,
       level,
       split: if split_l {
-        self.best_split(hl_hist, s.gl, s.hl, lo, mid, level)
+        self.best_split(hl_hist, s.gl, s.hl, mid - lo)
       } else {
         None
       },
@@ -1402,7 +1269,7 @@ fn Grower::grow_lossguide(
       depth: dl,
       level,
       split: if split_r {
-        self.best_split(hr_hist, gr, hr, mid, hi, level)
+        self.best_split(hr_hist, gr, hr, hi - mid)
       } else {
         None
       },
@@ -1435,7 +1302,7 @@ fn Grower::grow(
     level
   }
   let split = if depth < self.p.max_depth && hi - lo >= 2 {
-    self.best_split(hist, g, h, lo, hi, level)
+    self.best_split(hist, g, h, hi - lo)
   } else {
     None
   }

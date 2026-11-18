@@ -6,6 +6,7 @@ sys.argv, ds = sys.argv[:1], sys.argv[1:]
 import tuned as T  # reuses configs and runners (its main loop runs over no datasets)
 import os as _os
 if _os.environ.get('SPACE')=='2': import space2  # adds subsample and colsample_bynode
+if _os.environ.get('SPACE')=='3': import space3  # and min_data_in_leaf for moonboost
 from sklearn.metrics import roc_auc_score
 T.B=os.environ.get('MB_BIN',os.path.expanduser('~/mb/mbx/_build/native/release/build/cmd/main/main.exe'))
 SPLITS=int(os.environ.get('SPLITS','5')); TRIALS=int(os.environ.get('TRIALS','12'))

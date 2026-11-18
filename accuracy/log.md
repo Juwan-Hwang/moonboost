@@ -41,3 +41,5 @@
 | C3 | amazon 同配置对照（depth 6，3 次划分） | cat_smooth 0：mb .8514 vs xgb .8711；cat_smooth 1/10 + mdpg 0 + cat_l2 0：.8709/.8713 | 差距来自类别正则默认值，算法本身与 XGBoost 持平。XGBoost 按 -g/h 排序、并列时靠浮点误差随机打破；我们整数量化后并列是精确的，cat_smooth>0 让大类别优先 |
 | S6 | 剖析 lossguide 255 叶：histogram 38%、partition 22%、主循环 8.5%、partition_copy 5.7% | — | 已有父减子、压缩拷贝；无明显低垂果实 |
 | F1 | 新功能 subsample / colsample_bytree / colsample_bynode / seed（未采样行梯度置零，同 XGBoost） | depth 8，3 次划分：credit .7671→.7827（bynode .6）/.7847（ss .8）；bank .9352→.9364；默认参数模型逐字节不变 | 保留，ea97a65 进 main；调参空间 v2（space2.py）三库同时加入行/列采样后重跑 |
+| S7 | histogram 跳过最后一个不满的行字里的填充字节（airline 10 特征：每行 16 次累加里 6 次落在固定的备用槽，形成跨行的存储依赖链） | 争用下 cycles:u 47.5G→37.8G（-20%），模型逐字节相同；新增 3/8/10/15/16/20 特征 × depthwise/lossguide 的一字节/两字节一致性测试 | 候选，待空闲机器干净计时（1d23b8e 在 acc-exp） |
+| M12 | cat_crossfit 移植到当前代码，在 amazon 上测（depth 6，cs10，mdpg0，3 次划分） | .8713 → .8688；cs1 .8689；放开 max_cat_threshold .8601 | 否决（airline、amazon 都无收益） |

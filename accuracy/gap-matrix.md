@@ -22,7 +22,7 @@
 | 维度 | moonboost | 最强对手 | 状态 |
 |---|---|---|---|
 | 准确率 airline（同叶数 255/1023/4095） | .7629/.7779/.7868 | LightGBM .7612/.7761/.7829 | ✅ |
-| 准确率 OpenML 9 个二分类（等预算 24 组调参） | 多数在噪声内持平；credit、kdd 领先；amazon、electricity、phoneme、higgs 略低 0.001–0.005 | XGBoost/LightGBM | ≈ |
+| 准确率 OpenML 10 个二分类（5 次重复划分 × 12 组等预算调参，R0） | 9 个在 ±0.003 内持平；amazon 落后 0.012（C2 修正后 0.0015） | XGBoost/LightGBM | ≈ |
 | 单线程训练速度 GBM-perf 1M | 3.9 s | LightGBM 6.0 s | ✅ |
 | 多线程训练速度 | 不支持（MoonBit 无线程） | XGBoost 16 核 2.7 s（GBM-perf 官方，不同硬件） | ❌ |
 | 推理速度 native vs XGBoost C API | 见 README | | ✅（README） |
@@ -34,6 +34,10 @@
 | 类别特征训练 | 有（one-vs-rest + 排序划分，XGBoost 格式） | LightGBM/XGBoost/CatBoost | ✅（airline 同叶数更准） |
 | 按叶生长 | 有（lossguide，叶堆） | LightGBM | ≈（4095 叶同速；255–1023 叶慢 5–10%） |
 | 目标函数种类 | 4 种 | XGBoost 数十种 | ❌ |
+| 行/列采样（subsample、colsample_bytree/bynode） | 有（11-19 加） | XGBoost/LightGBM | ≈ |
+| min_data_in_leaf（按 hessian 估计行数，同 LightGBM） | 有（11-19 加） | LightGBM；XGBoost 无 | ≈ |
+| 梯度采样（GOSS/MVS） | 无 | LightGBM GOSS、CatBoost MVS；XGBoost 仅 GPU | ❌ |
+| 高基数类别（>255 类） | 覆盖不足 99% 时保留全部类别（11-19） | XGBoost 全保留 | ≈ |
 | GPU | 无 | XGBoost/CatBoost | ❌（非目标） |
 | 内存占用 | 未测 | | ? |
 

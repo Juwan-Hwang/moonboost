@@ -123,6 +123,7 @@ pub(all) struct TrainParams {
   cat_l2 : Double
   min_data_per_group : Double
   subsample : Double
+  sampling_method : String
   colsample_bytree : Double
   colsample_bynode : Double
   seed : Int32

@@ -240,3 +240,43 @@ test "min_data_in_leaf bounds the rows of every child" {
   }
   assert_true(json.contains("\"num_nodes\":\"3\""))
 }
+
+///|
+test "gradient_based sampling: seeded, unbiased enough to fit, method checked" {
+  let (x, y) = toy(3000)
+  let base = {
+    ..@moonboost.TrainParams::default(),
+    num_round: 20,
+    max_depth: 4,
+    subsample: 0.5,
+  }
+  let mvs = { ..base, sampling_method: "gradient_based", seed: 1, }
+  let a = @moonboost.train_xgboost_json(x, y, params=mvs)
+  let b = @moonboost.train_xgboost_json(x, y, params=mvs)
+  let u = @moonboost.train_xgboost_json(x, y, params={
+    ..mvs,
+    sampling_method: "uniform",
+  })
+  assert_eq(a, b)
+  assert_true(a != u)
+  let mse = fn(json : String) -> Double raise {
+    let p = @moonboost.Model::from_xgboost_json(json).predict_batch(x)
+    let mut s = 0.0
+    for i in 0..<y.length() {
+      let d = p[i].to_double() - y[i].to_double()
+      s += d * d
+    }
+    s / y.length().to_double()
+  }
+  let full = mse(
+    @moonboost.train_xgboost_json(x, y, params={ ..base, subsample: 1.0, }),
+  )
+  assert_true(mse(a) < full * 1.5)
+  let bad = @moonboost.train_xgboost_json(x, y, params={
+    ..mvs,
+    sampling_method: "goss",
+  }) catch {
+    _ => "error"
+  }
+  assert_eq(bad, "error")
+}

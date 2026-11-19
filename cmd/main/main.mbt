@@ -23,7 +23,8 @@ const USAGE : String =
   #|  --categorical 0,3,4  (columns of category codes)
   #|  --max-cat-to-onehot 4  --max-cat-threshold 64
   #|  --grow-policy depthwise | lossguide  --max-leaves 0
-  #|  --subsample 1  --colsample-bytree 1  --colsample-bynode 1  --seed 0
+  #|  --subsample 1  --sampling-method uniform|gradient_based
+  #|  --colsample-bytree 1  --colsample-bynode 1  --seed 0
   #|  --min-data-in-leaf 0
   #|labels.csv holds one label per line. The model is written as XGBoost JSON.
   #|
@@ -303,6 +304,7 @@ fn train(args : ArrayView[String]) -> Unit raise {
       "--max-cat-threshold" =>
         p = { ..p, max_cat_threshold: @string.parse_int(next()), }
       "--subsample" => p = { ..p, subsample: num(), }
+      "--sampling-method" => p = { ..p, sampling_method: next(), }
       "--colsample-bytree" => p = { ..p, colsample_bytree: num(), }
       "--colsample-bynode" => p = { ..p, colsample_bynode: num(), }
       "--seed" => p = { ..p, seed: @string.parse_int(next()), }

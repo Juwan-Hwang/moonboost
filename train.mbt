@@ -46,6 +46,11 @@ pub(all) struct TrainParams {
   /// fraction of rows each tree learns from, drawn anew per tree (the
   /// others get zero gradients, as in XGBoost)
   subsample : Double
+  /// `uniform` draws every row with chance `subsample`; `gradient_based`
+  /// keeps rows with chance proportional to sqrt(g^2 + lambda h^2), capped
+  /// at 1, and divides a kept row's g and h by its chance (minimal variance
+  /// sampling), so `subsample` of the rows are kept on average
+  sampling_method : String
   /// fraction of features each tree may split on, and of those, each node
   colsample_bytree : Double
   colsample_bynode : Double
@@ -79,6 +84,7 @@ pub fn TrainParams::default() -> TrainParams {
     cat_l2: 10.0,
     min_data_per_group: 100.0,
     subsample: 1.0,
+    sampling_method: "uniform",
     colsample_bytree: 1.0,
     colsample_bynode: 1.0,
     seed: 0,
@@ -692,6 +698,94 @@ fn Grower::set_scales(
   self.hs = if hmax > 0.0 { lh / hmax } else { 1.0 }
   self.igs = 1.0 / self.gs
   self.ihs = 1.0 / self.hs
+}
+
+///|
+/// Minimal variance sampling: row r is kept with chance
+/// min(1, s_r / mu), s_r = sqrt(g^2 + lambda h^2) with lambda the squared
+/// ratio of mean |g| to mean h, and mu chosen so the chances sum to
+/// fraction * n. Kept rows' g and h are divided by their chance, the others
+/// set to zero; the quantised pairs are rescaled to the new bounds. Returns
+/// the sums of g and h.
+fn Grower::mvs_sample(
+  self : Grower,
+  n : Int32,
+  fraction : Double,
+) -> (Double, Double) {
+  let gh = self.gh
+  let mut ag = 0.0
+  let mut sh = 0.0
+  for r in 0..<n {
+    ag += gh.unsafe_get(r * 2).to_double().abs()
+    sh += gh.unsafe_get(r * 2 + 1).to_double()
+  }
+  let lam = if sh > 0.0 { ag / sh * (ag / sh) } else { 0.0 }
+  let sc = FixedArray::make(n, 0.0)
+  let mut smax = 0.0
+  for r in 0..<n {
+    let g = gh.unsafe_get(r * 2).to_double()
+    let h = gh.unsafe_get(r * 2 + 1).to_double()
+    let v = (g * g + lam * h * h).sqrt()
+    sc.unsafe_set(r, v)
+    if v > smax {
+      smax = v
+    }
+  }
+  let target = fraction * n.to_double()
+  // sum of min(1, s / mu) falls as mu grows; at hi it is at most target
+  let mut lo = 0.0
+  let mut hi = if target > 0.0 { smax * n.to_double() / target } else { 0.0 }
+  for _ in 0..<40 {
+    let mu = 0.5 * (lo + hi)
+    let mut f = 0.0
+    for r in 0..<n {
+      let c = sc.unsafe_get(r) / mu
+      f += if c < 1.0 { c } else { 1.0 }
+    }
+    if f > target {
+      lo = mu
+    } else {
+      hi = mu
+    }
+  }
+  let mu = hi
+  let mut gsum = 0.0
+  let mut hsum = 0.0
+  let mut gmax = 0.0
+  let mut hmax = 0.0
+  for r in 0..<n {
+    let s = sc.unsafe_get(r)
+    let c = if mu > 0.0 { s / mu } else { 1.0 }
+    if s > 0.0 && (c >= 1.0 || self.uniform() < c) {
+      let w = if c < 1.0 { 1.0 / c } else { 1.0 }
+      let g = Float::from_double(gh.unsafe_get(r * 2).to_double() * w)
+      let h = Float::from_double(gh.unsafe_get(r * 2 + 1).to_double() * w)
+      gh.unsafe_set(r * 2, g)
+      gh.unsafe_set(r * 2 + 1, h)
+      gsum += g.to_double()
+      hsum += h.to_double()
+      if g.to_double().abs() > gmax {
+        gmax = g.to_double().abs()
+      }
+      if h.to_double() > hmax {
+        hmax = h.to_double()
+      }
+    } else {
+      gh.unsafe_set(r * 2, 0.0)
+      gh.unsafe_set(r * 2 + 1, 0.0)
+    }
+  }
+  self.set_scales(n, gmax * 1.0000001, hmax * 1.0000001)
+  let gq = self.gq
+  for r in 0..<n {
+    self.pack_at(
+      gq,
+      r,
+      gh.unsafe_get(r * 2).to_double(),
+      gh.unsafe_get(r * 2 + 1).to_double(),
+    )
+  }
+  (gsum, hsum)
 }
 
 ///|
@@ -1841,6 +1935,7 @@ fn train_json(
     p.max_bin > 65535 ||
     p.max_depth < 0 ||
     (p.max_depth == 0 && p.grow_policy != "lossguide") ||
+    (p.sampling_method != "uniform" && p.sampling_method != "gradient_based") ||
     p.num_round < 0 {
     raise InvalidModel("bad training parameters")
   }
@@ -2098,7 +2193,11 @@ fn train_json(
         gsum = g
         hsum = h
       }
-      if p.subsample < 1.0 {
+      if p.subsample < 1.0 && p.sampling_method == "gradient_based" {
+        let (g, h) = gr.mvs_sample(n, p.subsample)
+        gsum = g
+        hsum = h
+      } else if p.subsample < 1.0 {
         // rows left out of this tree keep their place with zero gradients
         let gh = gr.gh
         let gq = gr.gq

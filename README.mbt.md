@@ -42,7 +42,8 @@ trust because it is tested against XGBoost itself.
 | ES module for browsers and Node (`web/`) | done |
 | Browser demo (`docs/`, GitHub Pages) | done |
 | XGBoost UBJSON models (`.ubj`) | done |
-| Training: histogram trees for `reg:squarederror`, `binary:logistic`, `multi:softprob`, `multi:softmax`, written as XGBoost JSON | done |
+| Training: histogram trees for `reg:squarederror`, `reg:pseudohubererror`, `reg:squaredlogerror`, `binary:logistic`, `reg:logistic`, `binary:logitraw`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `multi:softprob`, `multi:softmax`, written as XGBoost JSON | done |
+| Training: row and feature sampling (`subsample` with `uniform` or `gradient_based` rows, `colsample_bytree`, `colsample_bynode`), `min_data_in_leaf` | done |
 | Training: categorical features (one category against the rest, or a set of categories) | done |
 | Training: loss-guided growth (`grow_policy: "lossguide"`, `max_leaves`) | done |
 | Training in browsers: JS, and a WebAssembly GC module (`webgc/`) | done |
@@ -113,8 +114,9 @@ node holds at most `max_cat_to_onehot` categories, and otherwise a set of
 categories taken from either end of their order by mean gradient
 (`cat_smooth`, `cat_l2`, `min_data_per_group` and `max_cat_threshold` as in
 LightGBM). Each categorical column keeps its `max_bin - 1` most frequent
-categories; the rest share a bin with missing values, and both go left, as
-unlisted categories do in the model. `grow_policy: "lossguide"` splits the
+categories, or, when those cover under 99% of the rows, as many as the
+histogram has room for; the rest share a bin with missing values, and both
+go left, as unlisted categories do in the model. `grow_policy: "lossguide"` splits the
 leaf with the largest gain first, up to `max_leaves` leaves (`max_depth: 0`
 for no depth limit). The models are XGBoost JSON with categorical splits:
 XGBoost loads them and predicts the same bits.
@@ -140,6 +142,35 @@ At every size moonboost's model is the most accurate. At 4095 leaves it
 trains in the same time as LightGBM with 0.004 more AUC; at 255 and 1023
 leaves LightGBM is 5 to 10% faster. With the categories label-encoded
 instead, moonboost reaches 0.7520 at depth 10.
+
+### Sampling and other objectives
+
+`subsample` trains each tree on a share of the rows, drawn anew per tree
+with `seed`. With `sampling_method: "gradient_based"` (minimal variance
+sampling; XGBoost offers it only on GPUs) a row is kept with a chance
+proportional to `sqrt(g^2 + lambda h^2)`, capped at 1, and a kept row's
+gradient pair is divided by that chance. On ten OpenML data sets, three
+random splits each, at `subsample: 0.5` it beat uniform sampling on adult
+(+0.0030 AUC), click (+0.0030), electricity (+0.0053) and kdd_upselling
+(+0.0075), by less on four more, and lost on credit (-0.0030); its AUC
+there matched training on all rows.
+
+The regression objectives use XGBoost's gradients (`count:poisson` with its
+`max_delta_step` of 0.7, `tweedie_variance_power` and `huber_slope`
+settable). On 16,000 synthetic rows, 100 rounds, depth 6, eta 0.1
+(`bench/train_objectives.py`), XGBoost predicts the same bits as moonboost
+on the moonboost model for every one, and the held-out loss is close to
+XGBoost's with the same settings:
+
+| Objective | moonboost | XGBoost 3.4.1 `hist` |
+|---|---|---|
+| `count:poisson` (Poisson deviance) | 0.14831 | 0.14629 |
+| `reg:gamma` | 1.26533 | 1.26800 |
+| `reg:tweedie` | 4.93330 | 4.93413 |
+| `reg:pseudohubererror` | 0.98422 | 0.99400 |
+| `reg:squaredlogerror` (RMSLE) | 0.18395 | 0.18536 |
+| `reg:logistic` (log loss) | 0.62110 | 0.62099 |
+| `binary:logitraw` (log loss) | 0.64138 | 0.64120 |
 
 Training also runs in the browser, and every build makes the same model bit
 for bit. `webgc/` is a 37 KB WebAssembly GC module with a loader,

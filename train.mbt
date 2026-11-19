@@ -59,6 +59,10 @@ pub(all) struct TrainParams {
   /// fewest rows a child may have, counted as LightGBM does from its share
   /// of the node's hessian
   min_data_in_leaf : Double
+  /// variance power of `reg:tweedie`, in (1, 2)
+  tweedie_variance_power : Double
+  /// slope (delta) of `reg:pseudohubererror`
+  huber_slope : Double
 }
 
 ///|
@@ -89,6 +93,8 @@ pub fn TrainParams::default() -> TrainParams {
     colsample_bynode: 1.0,
     seed: 0,
     min_data_in_leaf: 0.0,
+    tweedie_variance_power: 1.5,
+    huber_slope: 1.0,
   }
 }
 
@@ -751,8 +757,6 @@ fn Grower::mvs_sample(
   let mu = hi
   let mut gsum = 0.0
   let mut hsum = 0.0
-  let mut gmax = 0.0
-  let mut hmax = 0.0
   for r in 0..<n {
     let s = sc.unsafe_get(r)
     let c = if mu > 0.0 { s / mu } else { 1.0 }
@@ -764,15 +768,30 @@ fn Grower::mvs_sample(
       gh.unsafe_set(r * 2 + 1, h)
       gsum += g.to_double()
       hsum += h.to_double()
-      if g.to_double().abs() > gmax {
-        gmax = g.to_double().abs()
-      }
-      if h.to_double() > hmax {
-        hmax = h.to_double()
-      }
     } else {
       gh.unsafe_set(r * 2, 0.0)
       gh.unsafe_set(r * 2 + 1, 0.0)
+    }
+  }
+  self.requantize(n)
+  (gsum, hsum)
+}
+
+///|
+/// Sets the quantisation scales from the largest |g| and h of the n rows
+/// and quantises every row's pair again.
+fn Grower::requantize(self : Grower, n : Int32) -> Unit {
+  let gh = self.gh
+  let mut gmax = 0.0
+  let mut hmax = 0.0
+  for r in 0..<n {
+    let g = gh.unsafe_get(r * 2).to_double().abs()
+    let h = gh.unsafe_get(r * 2 + 1).to_double()
+    if g > gmax {
+      gmax = g
+    }
+    if h > hmax {
+      hmax = h
     }
   }
   self.set_scales(n, gmax * 1.0000001, hmax * 1.0000001)
@@ -785,7 +804,15 @@ fn Grower::mvs_sample(
       gh.unsafe_get(r * 2 + 1).to_double(),
     )
   }
-  (gsum, hsum)
+}
+
+///|
+/// exp(0.7) in float, XGBoost's default max_delta_step for count:poisson.
+let poisson_hess_scale : Double = 2.0137526834646735
+
+///|
+fn log1p(x : Double) -> Double {
+  @math.ln_1p(x)
 }
 
 ///|
@@ -1877,6 +1904,39 @@ fn Grower::gradients(
         let h = pr * (1.0 - pr)
         (pr - y, if h < 1.0e-16 { 1.0e-16 } else { h })
       }
+      // count:poisson, with XGBoost's max_delta_step 0.7 in the hessian
+      3 => {
+        let e = train_exp(m)
+        (e - y, e * poisson_hess_scale)
+      }
+      // reg:gamma
+      4 => {
+        let t = y * train_exp(-m)
+        (1.0 - t, if t < 1.0e-16 { 1.0e-16 } else { t })
+      }
+      // reg:tweedie
+      5 => {
+        let rho = self.p.tweedie_variance_power
+        let a = train_exp((1.0 - rho) * m)
+        let b = train_exp((2.0 - rho) * m)
+        let h = -y * (1.0 - rho) * a + (2.0 - rho) * b
+        (-y * a + b, if h < 1.0e-16 { 1.0e-16 } else { h })
+      }
+      // reg:pseudohubererror
+      6 => {
+        let z = m - y
+        let d = self.p.huber_slope
+        let sq = (1.0 + z / d * (z / d)).sqrt()
+        (z / sq, d * d / ((d * d + z * z) * sq))
+      }
+      // reg:squaredlogerror
+      7 => {
+        let pm = if m < -1.0 + 1.0e-6 { -1.0 + 1.0e-6 } else { m }
+        let lp = log1p(pm)
+        let ly = log1p(y)
+        let h = (ly - lp + 1.0) / ((pm + 1.0) * (pm + 1.0))
+        ((lp - ly) / (pm + 1.0), if h < 1.0e-6 { 1.0e-6 } else { h })
+      }
       _ => {
         let pr = probs[r * groups + k]
         let t = if y.to_int() == k { 1.0 } else { 0.0 }
@@ -1940,7 +2000,15 @@ fn train_json(
     raise InvalidModel("bad training parameters")
   }
   let groups = match p.objective {
-    "reg:squarederror" | "binary:logistic" => 1
+    "reg:squarederror"
+    | "binary:logistic"
+    | "reg:logistic"
+    | "binary:logitraw"
+    | "count:poisson"
+    | "reg:gamma"
+    | "reg:tweedie"
+    | "reg:pseudohubererror"
+    | "reg:squaredlogerror" => 1
     "multi:softprob" | "multi:softmax" => {
       if p.num_class < 2 {
         raise InvalidModel("`num_class` must be at least 2")
@@ -1953,8 +2021,24 @@ fn train_json(
     if y.is_nan() {
       raise InvalidModel("missing label")
     }
-    if p.objective == "binary:logistic" && (y < 0.0 || y > 1.0) {
-      raise InvalidModel("binary labels must be in [0, 1]")
+    match p.objective {
+      "binary:logistic" | "reg:logistic" | "binary:logitraw" =>
+        if y < 0.0 || y > 1.0 {
+          raise InvalidModel("binary labels must be in [0, 1]")
+        }
+      "count:poisson" | "reg:tweedie" =>
+        if y < 0.0 {
+          raise InvalidModel("\{p.objective} labels must be non-negative")
+        }
+      "reg:gamma" =>
+        if y <= 0.0 {
+          raise InvalidModel("reg:gamma labels must be positive")
+        }
+      "reg:squaredlogerror" =>
+        if y <= -1.0 {
+          raise InvalidModel("reg:squaredlogerror labels must be above -1")
+        }
+      _ => ()
     }
     if groups > 1 &&
       (
@@ -1971,12 +2055,45 @@ fn train_json(
     mean += y.to_double()
   }
   mean = mean / n.to_double()
+  if p.objective == "reg:tweedie" &&
+    !(p.tweedie_variance_power > 1.0 && p.tweedie_variance_power < 2.0) {
+    raise InvalidModel("tweedie_variance_power must be in (1, 2)")
+  }
+  if p.objective == "reg:pseudohubererror" && !(p.huber_slope > 0.0) {
+    raise InvalidModel("huber_slope must be positive")
+  }
   let (base_text, base_margin) = match p.objective {
-    "reg:squarederror" => {
+    "reg:squarederror" | "reg:pseudohubererror" => {
       let b = Float::from_double(mean)
       ("[" + xgb_float_text(b) + "]", b.to_double())
     }
-    "binary:logistic" => {
+    "reg:squaredlogerror" => {
+      // the prediction whose log1p is the mean log1p of the labels
+      let mut s = 0.0
+      for y in label {
+        s += log1p(y.to_double())
+      }
+      let b = Float::from_double(train_exp(s / n.to_double()) - 1.0)
+      ("[" + xgb_float_text(b) + "]", b.to_double())
+    }
+    "count:poisson" | "reg:gamma" | "reg:tweedie" => {
+      // stored as a mean, used as its log (XGBoost's ProbToMargin)
+      let b = Float::from_double(if mean < 1.0e-6 { 1.0e-6 } else { mean })
+      ("[" + xgb_float_text(b) + "]", @math.ln(b.to_double()))
+    }
+    "binary:logitraw" => {
+      // stored and used as a margin
+      let x = if mean < 1.0e-6 {
+        1.0e-6
+      } else if mean > 1.0 - 1.0e-6 {
+        1.0 - 1.0e-6
+      } else {
+        mean
+      }
+      let b = Float::from_double(@math.ln(x / (1.0 - x)))
+      ("[" + xgb_float_text(b) + "]", b.to_double())
+    }
+    "binary:logistic" | "reg:logistic" => {
       let pr = Float::from_double(
         if mean < 1.0e-6 {
           1.0e-6
@@ -1993,7 +2110,12 @@ fn train_json(
   }
   let kind = match p.objective {
     "reg:squarederror" => 0
-    "binary:logistic" => 1
+    "binary:logistic" | "reg:logistic" | "binary:logitraw" => 1
+    "count:poisson" => 3
+    "reg:gamma" => 4
+    "reg:tweedie" => 5
+    "reg:pseudohubererror" => 6
+    "reg:squaredlogerror" => 7
     _ => 2
   }
   let is_cat = FixedArray::make(data.cols, false)
@@ -2175,7 +2297,9 @@ fn train_json(
           )
         }
         1 => gr.set_scales(n, 1.0, 0.25)
-        _ => gr.set_scales(n, 1.0, 0.5)
+        2 => gr.set_scales(n, 1.0, 0.5)
+        // measured after the gradients are computed
+        _ => gr.set_scales(n, 1.0, 1.0)
       }
       for lo = 0; lo < n; lo = lo + block {
         let (g, h) = gr.gradients(
@@ -2192,6 +2316,9 @@ fn train_json(
         )
         gsum = g
         hsum = h
+      }
+      if kind >= 3 {
+        gr.requantize(n)
       }
       if p.subsample < 1.0 && p.sampling_method == "gradient_based" {
         let (g, h) = gr.mvs_sample(n, p.subsample)
@@ -2270,9 +2397,17 @@ fn train_json(
       "\"objective\":{\"name\":\"\{p.objective}\",\"softmax_multiclass_param\":{\"num_class\":\"\{groups}\"}}",
     )
   } else {
-    buf.write_string(
-      "\"objective\":{\"name\":\"\{p.objective}\",\"reg_loss_param\":{\"scale_pos_weight\":\"1\"}}",
-    )
+    let param = match p.objective {
+      "count:poisson" =>
+        ",\"poisson_regression_param\":{\"max_delta_step\":\"0.699999988\"}"
+      "reg:tweedie" =>
+        ",\"tweedie_regression_param\":{\"tweedie_variance_power\":\"\{p.tweedie_variance_power}\"}"
+      "reg:pseudohubererror" =>
+        ",\"pseudo_huber_param\":{\"huber_slope\":\"\{p.huber_slope}\"}"
+      "reg:squaredlogerror" => ""
+      _ => ",\"reg_loss_param\":{\"scale_pos_weight\":\"1\"}"
+    }
+    buf.write_string("\"objective\":{\"name\":\"\{p.objective}\"\{param}}")
   }
   buf.write_string("},\"version\":[3,4,1]}")
   buf.to_string()

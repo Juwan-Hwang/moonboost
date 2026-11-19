@@ -280,3 +280,84 @@ test "gradient_based sampling: seeded, unbiased enough to fit, method checked" {
   }
   assert_eq(bad, "error")
 }
+
+///|
+test "the other regression and binary objectives fit their targets" {
+  let (x, y) = toy(3000)
+  let objectives = [
+    "count:poisson", "reg:gamma", "reg:tweedie", "reg:pseudohubererror", "reg:squaredlogerror",
+    "reg:logistic", "binary:logitraw",
+  ]
+  for o in objectives {
+    // labels in each objective's domain, from y in about [-5, 5]
+    let t = y.map(v => {
+      let v = v.to_double()
+      let e = @math.exp(v / 3.0)
+      Float::from_double(
+        match o {
+          "count:poisson" | "reg:tweedie" => (e * 2.0).round()
+          "reg:gamma" | "reg:squaredlogerror" => e
+          "reg:logistic" => 1.0 / (1.0 + @math.exp(-v))
+          "binary:logitraw" => if v > 0.0 { 1.0 } else { 0.0 }
+          _ => v
+        },
+      )
+    })
+    let params = {
+      ..@moonboost.TrainParams::default(),
+      objective: o,
+      num_round: 40,
+      max_depth: 4,
+      // a slope near the residuals' scale: with slope 1, residuals of 5
+      // have hessians near 0 and Newton steps overshoot (as in XGBoost)
+      huber_slope: 5.0,
+    }
+    let err = fn(rounds : Int32) -> Double raise {
+      let json = @moonboost.train_xgboost_json(x, t, params={
+        ..params,
+        num_round: rounds,
+      })
+      let p = @moonboost.Model::from_xgboost_json(json).predict_batch(x)
+      let mut s = 0.0
+      for i in 0..<t.length() {
+        let q = if o == "binary:logitraw" {
+          1.0 / (1.0 + @math.exp(-p[i].to_double()))
+        } else {
+          p[i].to_double()
+        }
+        let d = q - t[i].to_double()
+        s += d * d
+      }
+      s / t.length().to_double()
+    }
+    let fitted = err(40)
+    let constant = err(0)
+    assert_true(fitted < constant * 0.5, msg="\{o}: \{fitted} vs \{constant}")
+  }
+}
+
+///|
+test "labels and settings outside an objective's domain are refused" {
+  let (x, y) = toy(100)
+  let cases = [
+    ("count:poisson", -1.0, 1.5, 1.0),
+    ("reg:gamma", 0.0, 1.5, 1.0),
+    ("reg:squaredlogerror", -1.0, 1.5, 1.0),
+    ("reg:logistic", 2.0, 1.5, 1.0),
+    ("reg:tweedie", 1.0, 2.0, 1.0),
+    ("reg:pseudohubererror", 1.0, 1.5, 0.0),
+  ]
+  for c in cases {
+    let (o, label, power, slope) = c
+    let t = y.map(_ => Float::from_double(label))
+    let params = {
+      ..@moonboost.TrainParams::default(),
+      objective: o,
+      num_round: 2,
+      tweedie_variance_power: power,
+      huber_slope: slope,
+    }
+    let r = @moonboost.train_xgboost_json(x, t, params~) catch { _ => "error" }
+    assert_eq(r, "error")
+  }
+}

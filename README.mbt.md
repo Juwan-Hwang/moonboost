@@ -167,7 +167,8 @@ rounds, eta 0.1, one thread) at `subsample: 0.5`, against LightGBM with
 
 Without sampling LightGBM takes 6.4 s and 9.0 s there, so sampling makes
 moonboost faster and LightGBM slower. Gradient-based sampling finds its
-threshold exactly in two passes over the rows; at 255 leaves it takes 4.8 s.
+threshold exactly in two passes over the rows (255 leaves, categories as
+numbers: 6.7 s with a bisection, 4.8 s now, same predictions).
 
 The regression objectives use XGBoost's gradients (`count:poisson` with its
 `max_delta_step` of 0.7, `tweedie_variance_power` and `huber_slope`

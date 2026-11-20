@@ -715,13 +715,15 @@ fn Grower::set_scales(
 /// min(1, s_r / mu), s_r = sqrt(g^2 + lambda h^2) with lambda the squared
 /// ratio of mean |g| to mean h, and mu chosen so the chances sum to
 /// fraction * n. Kept rows' g and h are divided by their chance, the others
-/// set to zero; the quantised pairs are rescaled to the new bounds. Returns
-/// the sums of g and h.
+/// set to zero; the quantised pairs are rescaled to the new bounds. Kept
+/// rows go to rows[0:m] and the others to out_rows; returns the sums of g
+/// and h, and m.
 fn Grower::mvs_sample(
   self : Grower,
   n : Int32,
   fraction : Double,
-) -> (Double, Double) {
+  out_rows : I32s,
+) -> (Double, Double, Int32) {
   let gh = self.gh
   let mut ag = 0.0
   let mut sh = 0.0
@@ -761,6 +763,9 @@ fn Grower::mvs_sample(
   let mu = hi
   let mut gsum = 0.0
   let mut hsum = 0.0
+  let rows = self.rows
+  let mut m = 0
+  let mut u = 0
   for r in 0..<n {
     let s = sc.unsafe_get(r)
     let c = if mu > 0.0 { s / mu } else { 1.0 }
@@ -772,13 +777,17 @@ fn Grower::mvs_sample(
       gh.unsafe_set(r * 2 + 1, h)
       gsum += g.to_double()
       hsum += h.to_double()
+      rows.unsafe_set(m, r)
+      m += 1
     } else {
       gh.unsafe_set(r * 2, 0.0)
       gh.unsafe_set(r * 2 + 1, 0.0)
+      out_rows.unsafe_set(u, r)
+      u += 1
     }
   }
   self.requantize(n)
-  (gsum, hsum)
+  (gsum, hsum, m)
 }
 
 ///|
@@ -1989,18 +1998,32 @@ fn Grower::route(
     }
     return
   }
-  let go = self.bin_table(s)
-  let bins = self.data.by_col
   let column = s.feature * self.leaf_at.length()
   let mut a = lo
   let mut b = hi - 1
-  for i in lo..<hi {
-    let r = src.unsafe_get(i)
-    let left = go[bins.unsafe_get(column + r).to_int()]
-    dst.unsafe_set(a, r)
-    dst.unsafe_set(b, r)
-    a += left
-    b -= 1 - left
+  // indices are in range: src holds rows, and the tables cover every bin
+  if self.narrow {
+    let go = self.left_table(s)
+    let cb = self.by8
+    for i in lo..<hi {
+      let r = src.unsafe_get(i)
+      let left = go.unsafe_get(cb.unsafe_get(column + r).to_int())
+      dst.unsafe_set(a, r)
+      dst.unsafe_set(b, r)
+      a += left
+      b -= 1 - left
+    }
+  } else {
+    let go = self.bin_table(s)
+    let bins = self.data.by_col
+    for i in lo..<hi {
+      let r = src.unsafe_get(i)
+      let left = go.unsafe_get(bins.unsafe_get(column + r).to_int())
+      dst.unsafe_set(a, r)
+      dst.unsafe_set(b, r)
+      a += left
+      b -= 1 - left
+    }
   }
   self.route(tree, tree.left[node], dst, src, lo, a, margin, groups, k)
   self.route(tree, tree.right[node], dst, src, a, hi, margin, groups, k)
@@ -2376,39 +2399,30 @@ fn train_json(
       if kind >= 3 {
         gr.requantize(n)
       }
-      if p.subsample < 1.0 && p.sampling_method == "gradient_based" {
-        let (g, h) = gr.mvs_sample(n, p.subsample)
+      // with row sampling the tree grows on the kept rows alone, rows[0:m];
+      // the rest (out_rows[0:n - m]) are routed down it afterwards
+      let m = if p.subsample < 1.0 && p.sampling_method == "gradient_based" {
+        let (g, h, m) = gr.mvs_sample(n, p.subsample, out_rows)
         gsum = g
         hsum = h
+        m
       } else if p.subsample < 1.0 {
-        // rows left out of this tree keep their place with zero gradients
-        let gh = gr.gh
-        let gq = gr.gq
-        for r in 0..<n {
-          if gr.uniform() >= p.subsample {
-            gsum -= gh.unsafe_get(r * 2).to_double()
-            hsum -= gh.unsafe_get(r * 2 + 1).to_double()
-            gh.unsafe_set(r * 2, 0.0)
-            gh.unsafe_set(r * 2 + 1, 0.0)
-            q_zero(gq, r)
-          }
-        }
-      }
-      // with row sampling the tree grows on the kept rows alone, rows[0:m];
-      // the rest (out[0:n - m]) are routed down it afterwards
-      let m = if p.subsample < 1.0 {
+        // without branches: each row is written to both lists and only
+        // its own list's end advances
         let gh = gr.gh
         let rows = gr.rows
+        let sub = p.subsample
         let mut m = 0
         let mut u = 0
         for r in 0..<n {
-          if gh.unsafe_get(r * 2) == 0.0 && gh.unsafe_get(r * 2 + 1) == 0.0 {
-            out_rows.unsafe_set(u, r)
-            u += 1
-          } else {
-            rows.unsafe_set(m, r)
-            m += 1
-          }
+          let keep = if gr.uniform() < sub { 1 } else { 0 }
+          let drop = (1 - keep).to_double()
+          gsum -= gh.unsafe_get(r * 2).to_double() * drop
+          hsum -= gh.unsafe_get(r * 2 + 1).to_double() * drop
+          rows.unsafe_set(m, r)
+          out_rows.unsafe_set(u, r)
+          m += keep
+          u += 1 - keep
         }
         m
       } else {

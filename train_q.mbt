@@ -344,12 +344,6 @@ fn Grower::histogram(
 }
 
 ///|
-/// Clears row r's quantised pair.
-fn q_zero(qa : QArr, r : Int32) -> Unit {
-  qa.unsafe_set(r, 0L)
-}
-
-///|
 /// histogram for 8 + 1 features (two words, 7 padding bytes skipped).
 fn hist_two_1(
   hist : Hist,

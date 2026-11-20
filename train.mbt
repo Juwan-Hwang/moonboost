@@ -498,12 +498,15 @@ priv struct GrowTree {
   sum_hess : Array[Float]
   // categorical splits: the sorted category codes that go right
   cats : Array[Array[Int32]]
+  // each split node's split, for routing rows the tree did not grow on
+  splits : Array[Split?]
 }
 
 ///|
 fn GrowTree::new() -> GrowTree {
   {
     cats: [],
+    splits: [],
     left: [],
     right: [],
     parent: [],
@@ -533,6 +536,7 @@ fn GrowTree::add(
   self.loss_change.push(0.0)
   self.sum_hess.push(Float::from_double(hess))
   self.cats.push([])
+  self.splits.push(None)
   self.left.length() - 1
 }
 
@@ -1434,6 +1438,7 @@ fn Grower::add_split(
   }
   tree.default_left[node] = s.default_left
   tree.loss_change[node] = Float::from_double(s.gain)
+  tree.splits[node] = Some(s)
   (l, r)
 }
 
@@ -1957,6 +1962,51 @@ fn Grower::gradients(
 }
 
 ///|
+/// Adds the leaf values of class k to the margins of the rows src[lo:hi],
+/// which reach `node` but were left out of the tree's growth: they are
+/// partitioned down the finished tree on the original bins, using dst for
+/// the children (the two buffers swap at each level).
+fn Grower::route(
+  self : Grower,
+  tree : GrowTree,
+  node : Int32,
+  src : I32s,
+  dst : I32s,
+  lo : Int32,
+  hi : Int32,
+  margin : FixedArray[Float],
+  groups : Int32,
+  k : Int32,
+) -> Unit {
+  if lo >= hi {
+    return
+  }
+  guard tree.splits[node] is Some(s) else {
+    let v = tree.split_cond[node]
+    for i in lo..<hi {
+      let at = src.unsafe_get(i) * groups + k
+      margin[at] = margin[at] + v
+    }
+    return
+  }
+  let go = self.bin_table(s)
+  let bins = self.data.by_col
+  let column = s.feature * self.leaf_at.length()
+  let mut a = lo
+  let mut b = hi - 1
+  for i in lo..<hi {
+    let r = src.unsafe_get(i)
+    let left = go[bins.unsafe_get(column + r).to_int()]
+    dst.unsafe_set(a, r)
+    dst.unsafe_set(b, r)
+    a += left
+    b -= 1 - left
+  }
+  self.route(tree, tree.left[node], dst, src, lo, a, margin, groups, k)
+  self.route(tree, tree.right[node], dst, src, a, hi, margin, groups, k)
+}
+
+///|
 /// Adds each copied position's leaf value to its row's margin of class k,
 /// for positions lo..hi.
 fn add_leaves(
@@ -2248,6 +2298,12 @@ fn train_json(
   }
   // margins accumulate in float32, as XGBoost predicts
   let margin = FixedArray::make(n * groups, Float::from_double(base_margin))
+  // rows left out of a sampled tree, and a buffer for routing them
+  let (out_rows, out_scratch) = if p.subsample < 1.0 {
+    (i32s_make(n), i32s_make(n))
+  } else {
+    (i32s_make(0), i32s_make(0))
+  }
   let trees = StringBuilder()
   let mut num_trees = 0
   let prob = FixedArray::make(groups, 0.0)
@@ -2338,10 +2394,30 @@ fn train_json(
           }
         }
       }
+      // with row sampling the tree grows on the kept rows alone, rows[0:m];
+      // the rest (out[0:n - m]) are routed down it afterwards
+      let m = if p.subsample < 1.0 {
+        let gh = gr.gh
+        let rows = gr.rows
+        let mut m = 0
+        let mut u = 0
+        for r in 0..<n {
+          if gh.unsafe_get(r * 2) == 0.0 && gh.unsafe_get(r * 2 + 1) == 0.0 {
+            out_rows.unsafe_set(u, r)
+            u += 1
+          } else {
+            rows.unsafe_set(m, r)
+            m += 1
+          }
+        }
+        m
+      } else {
+        n
+      }
       gr.sample_tree()
       let tree = GrowTree::new()
       let root = tree.add(-1, gr.weight(gsum, hsum), hsum)
-      let hist = gr.histogram(0, n, 0, 0)
+      let hist = gr.histogram(0, m, 0, 0)
       // every row is in exactly one slot of feature 0, so those slots sum
       // to the quantised totals
       let mut qg = 0.0
@@ -2351,12 +2427,15 @@ fn train_json(
         qh = qh + hist_h(hist, slot)
       }
       if p.grow_policy == "lossguide" {
-        gr.grow_lossguide(tree, n, hist, qg * gr.igs, qh * gr.ihs)
+        gr.grow_lossguide(tree, m, hist, qg * gr.igs, qh * gr.ihs)
       } else {
-        gr.grow(tree, root, 0, n, hist, qg * gr.igs, qh * gr.ihs, 0, 0)
+        gr.grow(tree, root, 0, m, hist, qg * gr.igs, qh * gr.ihs, 0, 0)
       }
       let leaves = FixedArray::from_array(tree.split_cond)
-      for lo = 0; lo < n; lo = lo + block {
+      if m < n {
+        gr.route(tree, 0, out_rows, out_scratch, 0, n - m, margin, groups, k)
+      }
+      for lo = 0; lo < m; lo = lo + block {
         add_leaves(
           margin,
           gr.orig[0],
@@ -2365,7 +2444,7 @@ fn train_json(
           groups,
           k,
           lo,
-          block_end(lo, n),
+          block_end(lo, m),
         )
       }
       if num_trees > 0 {

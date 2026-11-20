@@ -744,23 +744,32 @@ fn Grower::mvs_sample(
     }
   }
   let target = fraction * n.to_double()
-  // sum of min(1, s / mu) falls as mu grows; at hi it is at most target
-  let mut lo = 0.0
-  let mut hi = if target > 0.0 { smax * n.to_double() / target } else { 0.0 }
-  for _ in 0..<40 {
-    let mu = 0.5 * (lo + hi)
-    let mut f = 0.0
-    for r in 0..<n {
-      let c = sc.unsafe_get(r) / mu
-      f += if c < 1.0 { c } else { 1.0 }
-    }
-    if f > target {
-      lo = mu
-    } else {
-      hi = mu
+  let mu = match mvs_threshold(sc, n, target) {
+    Some(mu) => mu
+    None => {
+      // sum of min(1, s / mu) falls as mu grows; at hi it is at most target
+      let mut lo = 0.0
+      let mut hi = if target > 0.0 {
+        smax * n.to_double() / target
+      } else {
+        0.0
+      }
+      for _ in 0..<40 {
+        let mu = 0.5 * (lo + hi)
+        let mut f = 0.0
+        for r in 0..<n {
+          let c = sc.unsafe_get(r) / mu
+          f += if c < 1.0 { c } else { 1.0 }
+        }
+        if f > target {
+          lo = mu
+        } else {
+          hi = mu
+        }
+      }
+      hi
     }
   }
-  let mu = hi
   let mut gsum = 0.0
   let mut hsum = 0.0
   let rows = self.rows
@@ -788,6 +797,83 @@ fn Grower::mvs_sample(
   }
   self.requantize(n)
   (gsum, hsum, m)
+}
+
+///|
+/// The mu at which the sum over rows of min(1, s_r / mu) equals target,
+/// solved exactly in two passes: the scores are counted and summed in
+/// buckets by their leading bits (monotone for non-negative doubles), which
+/// locates the bucket mu falls in, and that bucket's scores are then sorted.
+/// None when no positive mu fits (too few positive scores).
+fn mvs_threshold(
+  sc : FixedArray[Double],
+  n : Int32,
+  target : Double,
+) -> Double? {
+  let shift = 48
+  let nb = 1 << (63 - shift)
+  let cnt = FixedArray::make(nb, 0)
+  let sum = FixedArray::make(nb, 0.0)
+  let mut total = 0.0
+  for r in 0..<n {
+    let v = sc.unsafe_get(r)
+    let b = (v.reinterpret_as_uint64() >> shift).to_int()
+    cnt.unsafe_set(b, cnt.unsafe_get(b) + 1)
+    sum.unsafe_set(b, sum.unsafe_get(b) + v)
+    total += v
+  }
+  // f(edge of bucket b) = rows in buckets >= b + (sum below b) / edge;
+  // f falls as b rises, so take the highest b with f(edge b) >= target
+  let mut above = 0 // rows in buckets > b
+  let mut above_sum = 0.0
+  let mut b = nb - 1
+  let mut found = -1
+  while b >= 1 {
+    let c = cnt[b]
+    if c > 0 {
+      let edge = (b.to_uint64() << shift).reinterpret_as_double()
+      let below = total - above_sum - sum[b]
+      if (above + c).to_double() + below / edge >= target {
+        found = b
+        break
+      }
+      above += c
+      above_sum += sum[b]
+    }
+    b -= 1
+  }
+  guard found >= 1 else { None }
+  let below = total - above_sum - sum[found]
+  // the bucket's scores, largest first
+  let vs = Array(capacity=cnt[found])
+  for r in 0..<n {
+    let v = sc.unsafe_get(r)
+    if (v.reinterpret_as_uint64() >> shift).to_int() == found {
+      vs.push(v)
+    }
+  }
+  vs.sort()
+  vs.rev_in_place()
+  // with the j largest of the bucket kept for sure, mu = (sum of the rest
+  // below it) / (target - rows kept for sure), valid when it lies between
+  // the j-th and (j + 1)-th scores
+  let mut rest = sum[found]
+  for j in 0..<=vs.length() {
+    if j > 0 {
+      rest -= vs[j - 1]
+    }
+    let k = (above + j).to_double()
+    if target - k <= 0.0 {
+      break
+    }
+    let mu = (below + rest) / (target - k)
+    let upper = if j > 0 { vs[j - 1] } else { 1.0e308 }
+    let lower = if j < vs.length() { vs[j] } else { 0.0 }
+    if mu > lower && mu <= upper && mu > 0.0 {
+      return Some(mu)
+    }
+  }
+  None
 }
 
 ///|

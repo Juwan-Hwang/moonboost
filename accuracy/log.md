@@ -50,3 +50,12 @@
 | T1 | airline 同叶数带类别（air_time.py，核 2，争用：核 0/1 跑 MVS） | 255 叶 mb 11.7 s vs lgb 7.4 s vs xgb 29.4 s；1023 叶 12.7 vs 10.7 vs 44.1；4095 mb 22.5 | 带类别时 255 叶慢 LightGBM 58%，比无类别时差得多，下一步剖析 |
 | T2 | airline+类别同叶数，空闲机干净计时（含 S7） | 255 叶 mb 7.2 s / lgb 7.0；1023 叶 11.1 / 9.9 / xgb 36.5；4095 叶 19.7 / 20.3 / 64.6；T1 的 11.7 s 是争用造成的 | 255 叶基本持平，1023 叶仍慢 12%。剖析（带类别 255 叶）：histogram 38%、partition 27%、gradients 6%、partition_copy 5% |
 | F3 | 新训练目标：reg:logistic、binary:logitraw、count:poisson（max_delta_step 0.7）、reg:gamma、reg:tweedie、reg:pseudohubererror、reg:squaredlogerror；梯度量化尺度改为算完梯度后实测 | 合成 16k 行，100 轮 depth 6：全部 XGBoost 加载后逐位一致；留出损失 mb/xgb：poisson .14831/.14629，gamma 1.26533/1.26800，tweedie 4.93330/4.93413，pseudohuber .98422/.99400，sqlog .18395/.18536，logistic .62110/.62099，logitraw .64138/.64120；默认目标模型逐字节不变 | 进 main（19e1a77），README 加表（bench/train_objectives.py） |
+
+## 11-20 采样只在保留行上建树（bag 分支 → main 6ce81a3+）
+- 假设：subsample/MVS 未保留行不进直方图/分区，树建完后把它们按原始分箱沿树分流加叶值，可提速且模型不变。
+- 结果（专用机核 2，交替 3 次，airline Xh 无类别参数）：depth 8 sub0.5 4.39→3.03 s（−31%，SAME）；sub0.8 4.13→3.64（−12%，SAME）；lossguide255 sub0.5 5.07→3.27（−35%，SAME）；MVS lossguide255 7.83→6.60（−16%，SAME）；不采样 depth8/lossguide255 持平（SAME）。
+- 首版分流用 by_col 且采样循环带分支只快 7–10%；改无分支采样 + 一字节 by8 分流后达上述数字。
+- 语义变化：节点行数（min_data_in_leaf、类别 per_row）改按保留行计，与 LightGBM bagging 一致；带类别时模型与旧版不逐字节相同（airline 255 叶 AUC .7607→.7619，1023 叶 .7734→.7731，噪声内）。
+- MVS 阈值改为两遍精确解（按 double 高 16 位分桶 + 桶内排序），替代 40 次二分：6.70→4.82 s（−28%），模型字节不同但 10 万测试行预测完全相同。
+- 对手同参数（airline 带类别，subsample 0.5，100 轮）：255 叶 mb 4.0 s/.7619，LGB bagging0.5 11.3 s/.7596（不 bagging 6.4 s/.7612），XGB 22.2 s/.7471；1023 叶 mb 6.1/.7731，LGB 14.3/.7716（不 bagging 9.0/.7761），XGB 33.6/.7463。注意 LGB 不采样 1023 叶 AUC .7761 高于所有采样结果。
+- 结论：保留，已合入 main。

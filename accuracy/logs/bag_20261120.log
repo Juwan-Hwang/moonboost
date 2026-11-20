@@ -1,0 +1,65 @@
+== --depth 8
+base 3817 ms  new 3808 ms
+base 3807 ms  new 3846 ms
+base 3711 ms  new 3752 ms
+SAME
+== --depth 8 --subsample 0.8
+base 4107 ms  new 3714 ms
+base 4214 ms  new 3593 ms
+base 4078 ms  new 3612 ms
+SAME
+== --grow-policy lossguide --max-leaves 255 --depth 0 --subsample 0.5 --sampling-method gradient_based
+base 7801 ms  new 6674 ms
+base 7885 ms  new 6568 ms
+base 7794 ms  new 6548 ms
+SAME
+== --grow-policy lossguide --max-leaves 255 --depth 0 --subsample 0.5
+base 5048 ms  new 3271 ms
+base 5030 ms  new 3262 ms
+base 5144 ms  new 3270 ms
+SAME
+== --grow-policy lossguide --max-leaves 1023 --depth 0 --subsample 0.5
+base 7060 ms  new 4499 ms
+base 6926 ms  new 4561 ms
+base 6989 ms  new 4656 ms
+SAME
+== --grow-policy lossguide --max-leaves 255 --depth 0
+base 4300 ms  new 4300 ms
+base 4341 ms  new 4357 ms
+base 4371 ms  new 4456 ms
+SAME
+moonboost leaves   255     4.0s  AUC 0.7619
+lightgbm  leaves   255    11.2s  AUC 0.7596
+/data/home/mb/venv/lib/python3.14/site-packages/xgboost/training.py:200: UserWarning: [14:45:43] WARNING: /__w/xgboost/xgboost/src/learner.cc:794: 
+Parameters: { "bagging_fraction", "bagging_freq" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+xgboost   leaves   255    19.4s  AUC 0.7547
+moonboost leaves  1023     6.1s  AUC 0.7731
+lightgbm  leaves  1023    14.3s  AUC 0.7716
+/data/home/mb/venv/lib/python3.14/site-packages/xgboost/training.py:200: UserWarning: [14:46:30] WARNING: /__w/xgboost/xgboost/src/learner.cc:794: 
+Parameters: { "bagging_fraction", "bagging_freq" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+xgboost   leaves  1023    30.4s  AUC 0.7638
+moonboost leaves   255     6.7s  AUC 0.7607
+lightgbm  leaves   255    11.2s  AUC 0.7596
+/data/home/mb/venv/lib/python3.14/site-packages/xgboost/training.py:200: UserWarning: [14:47:25] WARNING: /__w/xgboost/xgboost/src/learner.cc:794: 
+Parameters: { "bagging_fraction", "bagging_freq" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+xgboost   leaves   255    19.1s  AUC 0.7547
+moonboost leaves  1023    10.0s  AUC 0.7734
+lightgbm  leaves  1023    14.3s  AUC 0.7716
+/data/home/mb/venv/lib/python3.14/site-packages/xgboost/training.py:200: UserWarning: [14:48:15] WARNING: /__w/xgboost/xgboost/src/learner.cc:794: 
+Parameters: { "bagging_fraction", "bagging_freq" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+xgboost   leaves  1023    31.5s  AUC 0.7638
+lightgbm L255 bag 1.0 6.4s AUC 0.7612
+lightgbm L255 bag 0.5 11.3s AUC 0.7596
+xgboost L255 sub 0.5 22.2s AUC 0.7471
+lightgbm L1023 bag 1.0 9.0s AUC 0.7761
+lightgbm L1023 bag 0.5 14.3s AUC 0.7716
+xgboost L1023 sub 0.5 33.6s AUC 0.7463
+[exit 0 timedOut=False]

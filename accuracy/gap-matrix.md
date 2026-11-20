@@ -34,9 +34,9 @@
 | 类别特征训练 | 有（one-vs-rest + 排序划分，XGBoost 格式） | LightGBM/XGBoost/CatBoost | ✅（airline 同叶数更准） |
 | 按叶生长 | 有（lossguide，叶堆） | LightGBM | ≈（11-20 空闲机，带类别：255 叶 7.2 vs 7.0 s；1023 叶 11.1 vs 9.9 s 慢 12%；4095 叶 19.7 vs 20.3 s） |
 | 训练目标函数种类 | 11 种（11-20 加 reg:logistic、logitraw、poisson、gamma、tweedie、pseudohuber、squaredlog；XGBoost 加载逐位一致） | XGBoost 还有 absoluteerror、quantile、排序、生存、hinge 等 | ❌（缩小） |
-| 行/列采样（subsample、colsample_bytree/bynode） | 有（11-19 加） | XGBoost/LightGBM | ≈ |
+| 行/列采样（subsample、colsample_bytree/bynode） | 有；11-20 起只在保留行上建树。airline 带类别 sub 0.5：255 叶 4.0 s vs LGB 11.3 / XGB 22.2，1023 叶 6.1 vs 14.3 / 33.6，AUC 均最高 | XGBoost/LightGBM | 采样训练速度 ✅（单线程）；功能 ≈ |
 | min_data_in_leaf（按 hessian 估计行数，同 LightGBM） | 有（11-19 加） | LightGBM；XGBoost 无 | ≈ |
-| 梯度采样（GOSS/MVS） | 有 MVS（sampling_method=gradient_based，CPU；同采样率优于均匀采样，0.5 时 4 个数据集 +.003～.0075） | LightGBM GOSS、CatBoost MVS；XGBoost 仅 GPU | ≈（对 XGBoost CPU ✅）；未采样行仍进直方图，无速度收益 |
+| 梯度采样（GOSS/MVS） | 有 MVS（sampling_method=gradient_based，CPU；同采样率优于均匀采样，0.5 时 4 个数据集 +.003～.0075） | LightGBM GOSS、CatBoost MVS；XGBoost 仅 GPU | ≈（对 XGBoost CPU ✅）；11-20 起未采样行不进直方图，阈值两遍精确解，比旧版快 28% |
 | 高基数类别（>255 类） | 覆盖不足 99% 时保留全部类别（11-19） | XGBoost 全保留 | ≈ |
 | GPU | 无 | XGBoost/CatBoost | ❌（非目标） |
 | 内存占用 | 未测 | | ? |

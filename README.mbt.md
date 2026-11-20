@@ -155,6 +155,20 @@ random splits each, at `subsample: 0.5` it beat uniform sampling on adult
 (+0.0075), by less on four more, and lost on credit (-0.0030); its AUC
 there matched training on all rows.
 
+A sampled tree is grown on the kept rows only; the others are passed down
+the finished tree afterwards. On airline (1M rows, categories native, 100
+rounds, eta 0.1, one thread) at `subsample: 0.5`, against LightGBM with
+`bagging_fraction: 0.5, bagging_freq: 1` and XGBoost with `subsample: 0.5`:
+
+| Leaves | moonboost | LightGBM 4.7.0 | XGBoost 3.4.1 `hist` |
+|---|---|---|---|
+| 255 | 4.0 s, AUC 0.7619 | 11.3 s, AUC 0.7596 | 22.2 s, AUC 0.7471 |
+| 1023 | 6.1 s, AUC 0.7731 | 14.3 s, AUC 0.7716 | 33.6 s, AUC 0.7463 |
+
+Without sampling LightGBM takes 6.4 s and 9.0 s there, so sampling makes
+moonboost faster and LightGBM slower. Gradient-based sampling finds its
+threshold exactly in two passes over the rows; at 255 leaves it takes 4.8 s.
+
 The regression objectives use XGBoost's gradients (`count:poisson` with its
 `max_delta_step` of 0.7, `tweedie_variance_power` and `huber_slope`
 settable). On 16,000 synthetic rows, 100 rounds, depth 6, eta 0.1

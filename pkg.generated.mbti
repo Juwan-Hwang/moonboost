@@ -130,6 +130,7 @@ pub(all) struct TrainParams {
   min_data_in_leaf : Double
   tweedie_variance_power : Double
   huber_slope : Double
+  quantile_alpha : Double
 }
 pub fn TrainParams::default() -> Self
 

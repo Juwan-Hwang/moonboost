@@ -19,8 +19,9 @@ const USAGE : String =
   #|train options (XGBoost names and defaults):
   #|  --objective reg:squarederror | binary:logistic | multi:softprob | multi:softmax
   #|    | reg:logistic | binary:logitraw | count:poisson | reg:gamma | reg:tweedie
-  #|    | reg:pseudohubererror | reg:squaredlogerror
-  #|  --tweedie-variance-power 1.5  --huber-slope 1
+  #|    | reg:pseudohubererror | reg:squaredlogerror | reg:absoluteerror
+  #|    | reg:quantileerror
+  #|  --tweedie-variance-power 1.5  --huber-slope 1  --quantile-alpha 0.5
   #|  --num-class K  --rounds 10  --depth 6  --eta 0.3  --lambda 1
   #|  --gamma 0  --min-child-weight 1  --max-bin 256  --header
   #|  --categorical 0,3,4  (columns of category codes)
@@ -310,6 +311,7 @@ fn train(args : ArrayView[String]) -> Unit raise {
       "--sampling-method" => p = { ..p, sampling_method: next(), }
       "--tweedie-variance-power" => p = { ..p, tweedie_variance_power: num(), }
       "--huber-slope" => p = { ..p, huber_slope: num(), }
+      "--quantile-alpha" => p = { ..p, quantile_alpha: num(), }
       "--colsample-bytree" => p = { ..p, colsample_bytree: num(), }
       "--colsample-bynode" => p = { ..p, colsample_bynode: num(), }
       "--seed" => p = { ..p, seed: @string.parse_int(next()), }

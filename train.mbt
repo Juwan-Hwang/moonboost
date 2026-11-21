@@ -63,6 +63,8 @@ pub(all) struct TrainParams {
   tweedie_variance_power : Double
   /// slope (delta) of `reg:pseudohubererror`
   huber_slope : Double
+  /// the quantile `reg:quantileerror` predicts, in (0, 1)
+  quantile_alpha : Double
 }
 
 ///|
@@ -95,6 +97,7 @@ pub fn TrainParams::default() -> TrainParams {
     min_data_in_leaf: 0.0,
     tweedie_variance_power: 1.5,
     huber_slope: 1.0,
+    quantile_alpha: 0.5,
   }
 }
 
@@ -2029,6 +2032,16 @@ fn Grower::gradients(
         let sq = (1.0 + z / d * (z / d)).sqrt()
         (z / sq, d * d / ((d * d + z * z) * sq))
       }
+      // reg:absoluteerror and reg:quantileerror: the leaves are set to
+      // quantiles of the residuals once the tree is grown
+      8 => {
+        let a = if self.p.objective == "reg:quantileerror" {
+          self.p.quantile_alpha
+        } else {
+          0.5
+        }
+        (if m >= y { 1.0 - a } else { -a }, 1.0)
+      }
       // reg:squaredlogerror
       7 => {
         let pm = if m < -1.0 + 1.0e-6 { -1.0 + 1.0e-6 } else { m }
@@ -2135,6 +2148,73 @@ fn add_leaves(
 }
 
 ///|
+/// The alpha quantile of xs (sorted in place), interpolated as XGBoost's
+/// `common::Quantile` does; NaN when xs is empty.
+fn quantile(xs : FixedArray[Float], alpha : Double) -> Double {
+  let n = xs.length()
+  if n == 0 {
+    return 0.0 / 0.0
+  }
+  xs.sort()
+  let nd = n.to_double()
+  if alpha <= 1.0 / (nd + 1.0) {
+    return xs[0].to_double()
+  }
+  if alpha >= nd / (nd + 1.0) {
+    return xs[n - 1].to_double()
+  }
+  let x = alpha * (nd + 1.0)
+  let k = x.floor() - 1.0
+  let d = x - 1.0 - k
+  let v0 = xs[k.to_int()].to_double()
+  let v1 = xs[k.to_int() + 1].to_double()
+  v0 + d * (v1 - v0)
+}
+
+///|
+/// Sets each leaf of a grown tree to eta times the alpha quantile of
+/// label - margin over the tree's rows that reach it (XGBoost's adaptive
+/// leaves for the absolute and quantile losses).
+fn quantile_leaves(
+  tree : GrowTree,
+  gr : Grower,
+  label : ArrayView[Float],
+  margin : FixedArray[Float],
+  m : Int32,
+  alpha : Double,
+  eta : Double,
+) -> Unit {
+  let nodes = tree.split_cond.length()
+  // positions 0..m reach leaf leaf_at.unsafe_get(i); orig[0] maps them to rows
+  let count = FixedArray::make(nodes + 1, 0)
+  let leaf_at = gr.leaf_at
+  let orig = gr.orig[0]
+  for i in 0..<m {
+    count[leaf_at.unsafe_get(i) + 1] += 1
+  }
+  for v in 0..<nodes {
+    count[v + 1] += count[v]
+  }
+  let start = FixedArray::makei(nodes + 1, i => count[i])
+  let res = FixedArray::make(m, Float::from_int(0))
+  for i in 0..<m {
+    let r = orig.unsafe_get(i)
+    let v = leaf_at.unsafe_get(i)
+    res[count[v]] = Float::from_double(
+      label[r].to_double() - margin[r].to_double(),
+    )
+    count[v] += 1
+  }
+  for v in 0..<nodes {
+    let c = start[v + 1] - start[v]
+    if c > 0 {
+      let xs = FixedArray::makei(c, j => res[start[v] + j])
+      tree.split_cond[v] = Float::from_double(quantile(xs, alpha) * eta)
+    }
+  }
+}
+
+///|
 /// `allow_narrow` false forces two-byte copied bins (for tests).
 fn train_json(
   data : DenseMatrix,
@@ -2167,7 +2247,9 @@ fn train_json(
     | "reg:gamma"
     | "reg:tweedie"
     | "reg:pseudohubererror"
-    | "reg:squaredlogerror" => 1
+    | "reg:squaredlogerror"
+    | "reg:absoluteerror"
+    | "reg:quantileerror" => 1
     "multi:softprob" | "multi:softmax" => {
       if p.num_class < 2 {
         raise InvalidModel("`num_class` must be at least 2")
@@ -2221,9 +2303,25 @@ fn train_json(
   if p.objective == "reg:pseudohubererror" && !(p.huber_slope > 0.0) {
     raise InvalidModel("huber_slope must be positive")
   }
+  if p.objective == "reg:quantileerror" &&
+    !(p.quantile_alpha > 0.0 && p.quantile_alpha < 1.0) {
+    raise InvalidModel("quantile_alpha must be in (0, 1)")
+  }
+  // the quantile the absolute and quantile losses fit, in leaves too
+  let alpha = if p.objective == "reg:quantileerror" {
+    p.quantile_alpha
+  } else {
+    0.5
+  }
   let (base_text, base_margin) = match p.objective {
     "reg:squarederror" | "reg:pseudohubererror" => {
       let b = Float::from_double(mean)
+      ("[" + xgb_float_text(b) + "]", b.to_double())
+    }
+    "reg:absoluteerror" | "reg:quantileerror" => {
+      let b = Float::from_double(
+        quantile(FixedArray::makei(n, i => label[i]), alpha),
+      )
       ("[" + xgb_float_text(b) + "]", b.to_double())
     }
     "reg:squaredlogerror" => {
@@ -2275,6 +2373,7 @@ fn train_json(
     "reg:tweedie" => 5
     "reg:pseudohubererror" => 6
     "reg:squaredlogerror" => 7
+    "reg:absoluteerror" | "reg:quantileerror" => 8
     _ => 2
   }
   let is_cat = FixedArray::make(data.cols, false)
@@ -2531,6 +2630,9 @@ fn train_json(
       } else {
         gr.grow(tree, root, 0, m, hist, qg * gr.igs, qh * gr.ihs, 0, 0)
       }
+      if kind == 8 {
+        quantile_leaves(tree, gr, label, margin, m, alpha, p.eta)
+      }
       let leaves = FixedArray::from_array(tree.split_cond)
       if m < n {
         gr.route(tree, 0, out_rows, out_scratch, 0, n - m, margin, groups, k)
@@ -2583,7 +2685,9 @@ fn train_json(
         ",\"tweedie_regression_param\":{\"tweedie_variance_power\":\"\{p.tweedie_variance_power}\"}"
       "reg:pseudohubererror" =>
         ",\"pseudo_huber_param\":{\"huber_slope\":\"\{p.huber_slope}\"}"
-      "reg:squaredlogerror" => ""
+      "reg:squaredlogerror" | "reg:absoluteerror" => ""
+      "reg:quantileerror" =>
+        ",\"quantile_loss_param\":{\"quantile_alpha\":\"[\{p.quantile_alpha}]\"}"
       _ => ",\"reg_loss_param\":{\"scale_pos_weight\":\"1\"}"
     }
     buf.write_string("\"objective\":{\"name\":\"\{p.objective}\"\{param}}")

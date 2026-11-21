@@ -65,6 +65,13 @@ pub(all) struct TrainParams {
   huber_slope : Double
   /// the quantile `reg:quantileerror` predicts, in (0, 1)
   quantile_alpha : Double
+  /// for `rank:ndcg` and `rank:pairwise`: the sizes of the queries, whose
+  /// rows are consecutive and in this order (XGBoost's `group`)
+  group : Array[Int32]
+  /// `rank:ndcg` pairs only documents of which one is ranked in the top
+  /// this many of its query by the current scores (0: all pairs; 30, as
+  /// LightGBM's lambdarank_truncation_level)
+  rank_truncation : Int32
 }
 
 ///|
@@ -98,6 +105,8 @@ pub fn TrainParams::default() -> TrainParams {
     tweedie_variance_power: 1.5,
     huber_slope: 1.0,
     quantile_alpha: 0.5,
+    group: [],
+    rank_truncation: 30,
   }
 }
 
@@ -200,7 +209,7 @@ fn bin_block(
   fv : FixedArray[Float],
   fc : FixedArray[Int32],
   by_col : U16s,
-  rows : Int32,
+  base : Int32,
   lo : Int32,
   hi : Int32,
 ) -> Unit {
@@ -232,7 +241,7 @@ fn bin_block(
       k3 += cut_step(fv, fc, k3 + half, v3, x3, step)
       len = half
     }
-    let at = f * rows + r
+    let at = base + r
     by_col.unsafe_set(at, bin_code(v0, k0))
     by_col.unsafe_set(at + 1, bin_code(v1, k1))
     by_col.unsafe_set(at + 2, bin_code(v2, k2))
@@ -249,7 +258,7 @@ fn bin_block(
       k += cut_step(fv, fc, k + half, v, x, len - half)
       len = half
     }
-    by_col.unsafe_set(f * rows + r, bin_code(v, k))
+    by_col.unsafe_set(base + r, bin_code(v, k))
     r += 1
   }
 }
@@ -365,6 +374,28 @@ fn frequent_cover(
 }
 
 ///|
+/// Columns copied out of the row-major matrix at once when binning.
+const COL_STRIP : Int32 = 16
+
+///|
+/// Copies columns f .. f + w of the row-major data into bufs[0 .. w].
+fn copy_strip(
+  data : FixedArray[Float],
+  cols : Int32,
+  rows : Int32,
+  f : Int32,
+  w : Int32,
+  bufs : FixedArray[FixedArray[Float]],
+) -> Unit {
+  for r in 0..<rows {
+    let at = r * cols + f
+    for j in 0..<w {
+      bufs.unsafe_get(j).unsafe_set(r, data.unsafe_get(at + j))
+    }
+  }
+}
+
+///|
 fn bin_matrix(
   m : DenseMatrix,
   max_bin : Int32,
@@ -379,8 +410,19 @@ fn bin_matrix(
   let by_col = u16s_make(rows * cols)
   let missing = FixedArray::make(cols, false)
   let lowest : FixedArray[Float] = FixedArray::make(cols, 0.0)
+  // the columns are copied out a strip at a time, so that the passes over
+  // each column read contiguous memory rather than one float per row
+  let strip = if cols < COL_STRIP { cols } else { COL_STRIP }
+  let colbuf = FixedArray::makei(strip, _ => {
+    FixedArray::make(rows, (0.0 : Float))
+  })
   for f in 0..<cols {
-    let vals = sorted_column(m, f)
+    if f % strip == 0 {
+      let w = if cols - f < strip { cols - f } else { strip }
+      copy_strip(m.data, cols, rows, f, w, colbuf)
+    }
+    let col = colbuf[f % strip]
+    let vals = sorted_column({ data: col, rows, cols: 1, }, 0)
     let base = cuts.length()
     let n = vals.length()
     if n > 0 {
@@ -406,9 +448,8 @@ fn bin_matrix(
         cuts.push(kept[i])
       }
       cut_start[f + 1] = cuts.length()
-      let data = m.data
       for r in 0..<rows {
-        let v = data[r * cols + f]
+        let v = col[r]
         let mut b = 0
         if !v.is_nan() {
           // binary search for v among kept
@@ -464,12 +505,11 @@ fn bin_matrix(
     let hi = cuts.length()
     let fv = FixedArray::makei(hi - lo, fn(i) { cuts[lo + i] })
     let fc = FixedArray::makei(hi - lo, fn(i) { order_key(fv[i]) })
-    let data = m.data
     for lo = 0; lo < rows; lo = lo + block {
-      bin_block(data, cols, f, fv, fc, by_col, rows, lo, block_end(lo, rows))
+      bin_block(col, 1, 0, fv, fc, by_col, f * rows, lo, block_end(lo, rows))
     }
     for r in 0..<rows {
-      if data[r * cols + f].is_nan() {
+      if col[r].is_nan() {
         missing[f] = true
         break
       }
@@ -2050,6 +2090,8 @@ fn Grower::gradients(
         let h = (ly - lp + 1.0) / ((pm + 1.0) * (pm + 1.0))
         ((lp - ly) / (pm + 1.0), if h < 1.0e-6 { 1.0e-6 } else { h })
       }
+      // rank:ndcg and rank:pairwise, computed per query beforehand
+      9 => (probs[r * 2], probs[r * 2 + 1])
       _ => {
         let pr = probs[r * groups + k]
         let t = if y.to_int() == k { 1.0 } else { 0.0 }
@@ -2249,7 +2291,9 @@ fn train_json(
     | "reg:pseudohubererror"
     | "reg:squaredlogerror"
     | "reg:absoluteerror"
-    | "reg:quantileerror" => 1
+    | "reg:quantileerror"
+    | "rank:ndcg"
+    | "rank:pairwise" => 1
     "multi:softprob" | "multi:softmax" => {
       if p.num_class < 2 {
         raise InvalidModel("`num_class` must be at least 2")
@@ -2274,6 +2318,10 @@ fn train_json(
       "reg:gamma" =>
         if y <= 0.0 {
           raise InvalidModel("reg:gamma labels must be positive")
+        }
+      "rank:ndcg" | "rank:pairwise" =>
+        if y < 0.0 || y > 31.0 || y.to_int().to_double() != y.to_double() {
+          raise InvalidModel("relevance labels must be integers in 0 .. 31")
         }
       "reg:squaredlogerror" =>
         if y <= -1.0 {
@@ -2306,6 +2354,38 @@ fn train_json(
   if p.objective == "reg:quantileerror" &&
     !(p.quantile_alpha > 0.0 && p.quantile_alpha < 1.0) {
     raise InvalidModel("quantile_alpha must be in (0, 1)")
+  }
+  let is_rank = p.objective == "rank:ndcg" || p.objective == "rank:pairwise"
+  if is_rank {
+    let mut total = 0
+    for c in p.group {
+      if c <= 0 {
+        raise InvalidModel("query sizes must be positive")
+      }
+      total += c
+    }
+    if total != n {
+      raise InvalidModel("query sizes add up to \{total}, not \{n} rows")
+    }
+  }
+  let rank_starts = if is_rank {
+    let st = FixedArray::make(p.group.length() + 1, 0)
+    for i, c in p.group {
+      st[i + 1] = st[i] + c
+    }
+    st
+  } else {
+    FixedArray::make(0, 0)
+  }
+  let rank_inv = if is_rank {
+    rank_inverse_max_dcg(
+      label,
+      rank_starts,
+      p.objective == "rank:ndcg",
+      p.rank_truncation,
+    )
+  } else {
+    FixedArray::make(0, 0.0)
   }
   // the quantile the absolute and quantile losses fit, in leaves too
   let alpha = if p.objective == "reg:quantileerror" {
@@ -2374,6 +2454,7 @@ fn train_json(
     "reg:pseudohubererror" => 6
     "reg:squaredlogerror" => 7
     "reg:absoluteerror" | "reg:quantileerror" => 8
+    "rank:ndcg" | "rank:pairwise" => 9
     _ => 2
   }
   let is_cat = FixedArray::make(data.cols, false)
@@ -2537,6 +2618,15 @@ fn train_json(
         }
       }
       out
+    } else if kind == 9 {
+      rank_gradients(
+        label,
+        margin,
+        rank_starts,
+        rank_inv,
+        p.objective == "rank:ndcg",
+        p.rank_truncation,
+      )
     } else {
       FixedArray::make(0, 0.0)
     }
@@ -2686,6 +2776,8 @@ fn train_json(
       "reg:pseudohubererror" =>
         ",\"pseudo_huber_param\":{\"huber_slope\":\"\{p.huber_slope}\"}"
       "reg:squaredlogerror" | "reg:absoluteerror" => ""
+      "rank:ndcg" | "rank:pairwise" =>
+        ",\"lambdarank_param\":{\"lambdarank_bias_norm\":\"1\",\"lambdarank_normalization\":\"1\",\"lambdarank_num_pair_per_sample\":\"4294967295\",\"lambdarank_pair_method\":\"topk\",\"lambdarank_score_normalization\":\"1\",\"lambdarank_unbiased\":\"0\",\"ndcg_exp_gain\":\"1\"}"
       "reg:quantileerror" =>
         ",\"quantile_loss_param\":{\"quantile_alpha\":\"[\{p.quantile_alpha}]\"}"
       _ => ",\"reg_loss_param\":{\"scale_pos_weight\":\"1\"}"

@@ -28,7 +28,7 @@ trust because it is tested against XGBoost itself.
 | Feature | Status |
 |---|---|
 | XGBoost JSON models (`gbtree`) | done |
-| Objectives: `reg:*` (including `reg:absoluteerror` and `reg:quantileerror`), `binary:logistic`, `binary:logitraw`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `multi:softprob`, `multi:softmax` | done |
+| Objectives: `reg:*` (including `reg:absoluteerror` and `reg:quantileerror`), `binary:logistic`, `binary:logitraw`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `multi:softprob`, `multi:softmax`, `rank:ndcg`, `rank:pairwise` | done |
 | Missing values (NaN, absent features) | done |
 | Categorical splits | done |
 | Leaf indices (`pred_leaf`) | done |
@@ -203,6 +203,30 @@ held-out pinball loss with `min_data_in_leaf: 20` (LightGBM's default):
 moonboost's loss is about 0.5% below XGBoost's (five to ten standard
 errors per seed) and 0.04 to 0.13% above LightGBM's (about one standard
 error per seed).
+
+### Ranking
+
+`rank:ndcg` is LambdaRank: within each query (`group`, the query sizes in
+row order, as XGBoost's), every pair of documents with different labels of
+which one is in the current top `rank_truncation` (30, LightGBM's
+default; 0 for all pairs) is weighted by the change in NDCG of swapping
+them, divided by 0.01 plus their score gap, and each query's gradients are
+scaled by log2(1 + s) / s. `rank:pairwise` is RankNet on the same pairs.
+The model is an XGBoost `rank:ndcg` model; XGBoost predicts the same bits.
+
+MSLR-WEB10K fold 1 (723,412 rows in 6,000 queries, 136 features), one
+thread, 100 rounds, eta 0.1, 255 leaves, `min_child_weight` 0.001,
+NDCG@10 on the 2,000 test queries (`bench/train_rank.py`); times include
+binning:
+
+| | moonboost | XGBoost 3.4.1 `hist` | LightGBM 4.7.0 |
+|---|---|---|---|
+| Training time | 40.0 to 41.3 s | 60.5 s | 42.9 s |
+| NDCG@10 | 0.5051 | 0.5042 | 0.5042 |
+
+The NDCG difference (+0.0010, standard error 0.0019 over queries) is not
+significant. With all pairs (`rank_truncation: 0`) moonboost takes 52.3 s
+for 0.5020.
 
 Training also runs in the browser, and every build makes the same model bit
 for bit. `webgc/` is a 37 KB WebAssembly GC module with a loader,

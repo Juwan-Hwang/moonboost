@@ -392,3 +392,82 @@ test "labels and settings outside an objective's domain are refused" {
     assert_eq(r, "error")
   }
 }
+
+///|
+/// Mean NDCG@10 over queries of `size` consecutive rows.
+fn mean_ndcg(pred : Array[Float], rel : Array[Float], size : Int32) -> Double {
+  let mut total = 0.0
+  let nq = rel.length() / size
+  for q in 0..<nq {
+    let idx = Array::makei(size, i => q * size + i)
+    let dcg_of = (order : Array[Int32]) => {
+      let mut d = 0.0
+      for i in 0..<10 {
+        let g = @math.pow(2.0, rel[order[i]].to_double()) - 1.0
+        d += g / (@math.ln(2.0 + i.to_double()) / @math.ln(2.0))
+      }
+      d
+    }
+    let by_pred = idx.copy()
+    by_pred.sort_by((a, b) => pred[b].compare(pred[a]))
+    let ideal = idx.copy()
+    ideal.sort_by((a, b) => rel[b].compare(rel[a]))
+    let best = dcg_of(ideal)
+    total += if best > 0.0 { dcg_of(by_pred) / best } else { 1.0 }
+  }
+  total / nq.to_double()
+}
+
+///|
+test "rank:ndcg and rank:pairwise order the documents of each query" {
+  let (x, y) = toy(2000)
+  // relevance 0 .. 3 from the target, in queries of 20 rows
+  let rel = y.map(v => {
+    Float::from_int(
+      if v < -1.0 {
+        0
+      } else if v < 0.5 {
+        1
+      } else if v < 2.0 {
+        2
+      } else {
+        3
+      },
+    )
+  })
+  let group = Array::make(100, 20)
+  let flat = mean_ndcg(Array::make(2000, Float::from_double(0.0)), rel, 20)
+  for o in ["rank:ndcg", "rank:pairwise"] {
+    let json = @moonboost.train_xgboost_json(x, rel, params={
+      ..@moonboost.TrainParams::default(),
+      objective: o,
+      group,
+      num_round: 30,
+      eta: 0.3,
+      max_depth: 4,
+    })
+    let m = @moonboost.Model::from_xgboost_json(json)
+    let score = mean_ndcg(m.predict_batch(x), rel, 20)
+    assert_true(
+      score > 0.9 && score > flat + 0.2,
+      msg="\{o}: \{score} vs \{flat}",
+    )
+  }
+  // the query sizes must cover the rows, and labels be small integers
+  let bad = @moonboost.train_xgboost_json(x, rel, params={
+    ..@moonboost.TrainParams::default(),
+    objective: "rank:ndcg",
+    group: [1000],
+  }) catch {
+    _ => "error"
+  }
+  assert_eq(bad, "error")
+  let bad = @moonboost.train_xgboost_json(x, y, params={
+    ..@moonboost.TrainParams::default(),
+    objective: "rank:ndcg",
+    group,
+  }) catch {
+    _ => "error"
+  }
+  assert_eq(bad, "error")
+}

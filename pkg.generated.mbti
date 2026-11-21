@@ -131,6 +131,8 @@ pub(all) struct TrainParams {
   tweedie_variance_power : Double
   huber_slope : Double
   quantile_alpha : Double
+  group : Array[Int32]
+  rank_truncation : Int32
 }
 pub fn TrainParams::default() -> Self
 

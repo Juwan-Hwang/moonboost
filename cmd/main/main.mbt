@@ -20,7 +20,9 @@ const USAGE : String =
   #|  --objective reg:squarederror | binary:logistic | multi:softprob | multi:softmax
   #|    | reg:logistic | binary:logitraw | count:poisson | reg:gamma | reg:tweedie
   #|    | reg:pseudohubererror | reg:squaredlogerror | reg:absoluteerror
-  #|    | reg:quantileerror
+  #|    | reg:quantileerror | rank:ndcg | rank:pairwise
+  #|  --group sizes.txt  (rank: one query size per line, rows in order)
+  #|  --rank-truncation 30  (rank: pair only within the top N, 0 all)
   #|  --tweedie-variance-power 1.5  --huber-slope 1  --quantile-alpha 0.5
   #|  --num-class K  --rounds 10  --depth 6  --eta 0.3  --lambda 1
   #|  --gamma 0  --min-child-weight 1  --max-bin 256  --header
@@ -316,6 +318,18 @@ fn train(args : ArrayView[String]) -> Unit raise {
       "--colsample-bynode" => p = { ..p, colsample_bynode: num(), }
       "--seed" => p = { ..p, seed: @string.parse_int(next()), }
       "--min-data-in-leaf" => p = { ..p, min_data_in_leaf: num(), }
+      "--rank-truncation" =>
+        p = { ..p, rank_truncation: @string.parse_int(next()), }
+      "--group" => {
+        let sizes = []
+        for line in @fs.read_file_to_string(next()).split("\n") {
+          let t = line.trim()
+          if t.length() > 0 {
+            sizes.push(@string.parse_int(t))
+          }
+        }
+        p = { ..p, group: sizes, }
+      }
       _ => {
         if a.has_prefix("-") {
           raise CliError("unknown option \{a}")

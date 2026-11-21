@@ -228,6 +228,12 @@ The NDCG difference (+0.0010, standard error 0.0019 over queries) is not
 significant. With all pairs (`rank_truncation: 0`) moonboost takes 52.3 s
 for 0.5020.
 
+`rank:pairwise` on the same data: moonboost 38.9 to 39.4 s for 0.4915,
+XGBoost 53.6 s for 0.4923 with its default pairs and 54.1 s for 0.4875 with
+`lambdarank_pair_method: topk` and 30 pairs per document; neither NDCG
+difference is significant (-0.0008 and +0.0040, standard errors 0.0023 and
+0.0022). LightGBM has no pairwise objective.
+
 Training also runs in the browser, and every build makes the same model bit
 for bit. `webgc/` is a 37 KB WebAssembly GC module with a loader,
 `web/train_wasm.mjs` (`bench/train_wasm_bench.mjs` times it); in Node it

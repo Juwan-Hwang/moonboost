@@ -81,3 +81,4 @@
 - 11-22 排序键专用快排替代泛型 sort（−3~4%，3ea3361）。单字节分箱按字整字写入（MSLR 建数据 2.84→2.16 s，GBM-perf 不变，81b699d）。
 - 11-22 MSLR 全量（同会话）：mb 38.4 s/.5051，XGB 59.4/.5042，LGB 42.0/.5042；全对 52.3→46.0 s；pairwise 39.3 s 不变。参数 JSON 模型（binary/lossguide+subsample/quantile）XGBoost 加载预测逐位一致。
 - 否决：量化直方图改 Int32（当前量化级 2^31/n，每行值约 12 位，节点和放不进 32 位打包）。
+- 11-22 否决：binary:logistic 梯度单独成环（airline 255 叶 100 轮 5.32→5.27 s，噪声内）。部分热点：airline 255 叶 histogram 37%、partition 23%、gradients 11%、partition_copy 9%。

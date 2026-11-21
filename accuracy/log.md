@@ -75,3 +75,5 @@
 - 分箱按 16 列条带转置：MSLR 3 轮 4.7→3.2 s，模型逐字节相同。
 - 11-22 参数 JSON（main 1f9b81d，CI 绿）：TrainParams::from_json（XGBoost 名称+别名，数字可为字符串）；web train_with、webgc train_run_params（train_wasm.mjs 第 4 参数可传对象，非 4 种基础目标自动走对象）、CLI --params。浏览器端此前只能用 4 种目标与 5 个参数，现可用全部 15 目标/类别/采样/lossguide/排序。JS、wasm-gc、CLI 同参数模型逐字节一致。
 - 11-22 rank:pairwise MSLR（单线程 100 轮 255 叶）：mb 38.9–39.4 s / .4915；XGB 默认 pairwise 53.6 s / .4923（差 −.0008±.0023）；XGB topk30 54.1 s / .4875（差 +.0040±.0022）。均不显著；pairwise 截断 0：41.3 s / .4871（更差）。
+- 11-22 否决：窄直方图按 2/4/8 字（16/32/64 特征）分遍扫行，MSLR 30 轮 14.9 s → 18.3–22.7 s（更慢；行索引/梯度重复读取得不偿失）。
+- 11-22 CSV 读取（main 38d6b1d，CI 绿，native 77/77）：原地扫描+精确小数快速路径（≤15 位有效数字、|exp|≤22 时 m×10^e 一次舍入，其余回落 parse_double，3000+ 随机串逐位相同）；from_csv_bytes 直接读 UTF-8。MSLR 579 MB 加载+分箱+1 轮：9.6 → 4.8 s；1M×8 GBM-perf 0.62 → 0.12 s（参考：pandas read_csv 读 MSLR 0.78 s，仍更快）。模型逐字节相同。

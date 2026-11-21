@@ -19,14 +19,27 @@ fn rank_gradients(
   let n = label.length()
   let out = FixedArray::make(n * 2, 0.0)
   let disc = discounts(starts)
-  let keys : Array[UInt64] = []
-  let order : Array[Int32] = []
-  let sc : Array[Double] = []
-  let lb : Array[Double] = []
-  let gn : Array[Double] = []
-  let ex : Array[Double] = []
-  let lam : Array[Double] = []
-  let hes : Array[Double] = []
+  let mut longest = 0
+  for q in 0..<(starts.length() - 1) {
+    let cnt = starts[q + 1] - starts[q]
+    if cnt > longest {
+      longest = cnt
+    }
+  }
+  // per-query scratch, sized for the longest query
+  let keys : Array[UInt64] = Array(capacity=longest)
+  let order = FixedArray::make(longest, 0)
+  let sc = FixedArray::make(longest, 0.0)
+  let lb = FixedArray::make(longest, 0.0)
+  let gn = FixedArray::make(longest, 0.0)
+  let ex = FixedArray::make(longest, 0.0)
+  let lam = FixedArray::make(longest, 0.0)
+  let hes = FixedArray::make(longest, 0.0)
+  let cls = FixedArray::make(longest, 0)
+  let labels = FixedArray::make(max_classes, 0.0)
+  let other_len = FixedArray::make(max_classes, 0)
+  let next = FixedArray::make(max_classes, 0)
+  let list = FixedArray::make(max_classes * longest, 0)
   for q in 0..<(starts.length() - 1) {
     let s = starts[q]
     let cnt = starts[q + 1] - s
@@ -45,29 +58,58 @@ fn rank_gradients(
       keys.push((up.lnot().to_uint64() << 32) | i.to_uint64())
     }
     keys.sort()
-    order.clear()
-    for key in keys {
-      order.push(s + (key & 0xffffffffUL).to_int())
+    for i, key in keys {
+      order[i] = s + (key & 0xffffffffUL).to_int()
     }
     // the query in that order: scores, labels, gains, exp(score - best)
     // and the gradient and hessian sums of each position
-    sc.clear()
-    lb.clear()
-    gn.clear()
-    ex.clear()
-    lam.clear()
-    hes.clear()
     let best = margin[order[0]].to_double()
     for i in 0..<cnt {
       let v = margin[order[i]].to_double()
       let l = label[order[i]].to_double()
-      sc.push(v)
-      lb.push(l)
-      gn.push(gain(l))
+      sc[i] = v
+      lb[i] = l
+      gn[i] = gain(l)
       let e = @math.exp(v - best)
-      ex.push(if e < 1.0e-300 { 1.0e-300 } else { e })
-      lam.push(0.0)
-      hes.push(0.0)
+      ex[i] = if e < 1.0e-300 { 1.0e-300 } else { e }
+      lam[i] = 0.0
+      hes[i] = 0.0
+    }
+    // documents by label class (up to max_classes distinct labels), and
+    // for each class the positions, in order, of the documents not in it
+    let mut classes = 0
+    if ndcg {
+      for i in 0..<cnt {
+        let l = lb[i]
+        let mut c = 0
+        while c < classes && labels[c] != l {
+          c += 1
+        }
+        if c == classes {
+          if classes == max_classes {
+            classes = -1
+            break
+          }
+          labels[c] = l
+          classes += 1
+        }
+        cls[i] = c
+      }
+      if classes > 0 {
+        for c in 0..<classes {
+          other_len[c] = 0
+          next[c] = c * longest
+        }
+        for j in 0..<cnt {
+          let cj = cls[j]
+          for c in 0..<classes {
+            if c != cj {
+              list[c * longest + other_len[c]] = j
+              other_len[c] = other_len[c] + 1
+            }
+          }
+        }
+      }
     }
     // LightGBM divides each pair's NDCG change by 0.01 plus the score gap
     // once the scores differ
@@ -81,25 +123,59 @@ fn rank_gradients(
       let di = disc[i]
       let mut lam_i = 0.0
       let mut hes_i = 0.0
-      if ndcg {
-        // without branches: a pair of equal labels has no gain gap and adds
-        // nothing; with t the model's chance that i is ahead, the better
-        // labelled one is pushed up by (1 - its chance) times the weight
-        for j in (i + 1)..<cnt {
-          let ej = ex[j]
+      if ndcg && classes > 0 {
+        // only the documents of other labels: a pair of equal labels adds
+        // exactly zero, and the others come in the same increasing order,
+        // so every sum is the same. With t the model's chance that i is
+        // ahead, the better labelled one is pushed up by (1 - its chance)
+        // times the weight. Indices are below cnt, within every scratch
+        // array and disc
+        let lst = cls.unsafe_get(i)
+        let base = lst * longest
+        let stop = base + other_len.unsafe_get(lst)
+        let mut p = next.unsafe_get(lst)
+        while p < stop && list.unsafe_get(p) <= i {
+          p += 1
+        }
+        next.unsafe_set(lst, p)
+        for pp in p..<stop {
+          let j = list.unsafe_get(pp)
+          let ej = ex.unsafe_get(j)
           let e = ei + ej
-          let w = c + (si - sc[j]).abs()
+          let w = c + (si - sc.unsafe_get(j)).abs()
           let r = 1.0 / (e * w)
           let t = ei * w * r
-          let dg = gi - gn[j]
+          let dg = gi - gn.unsafe_get(j)
           let ad = dg.abs()
-          let f = (di - disc[j]) * inv * e * r
+          let f = (di - disc.unsafe_get(j)) * inv * e * r
           let g = (0.5 * dg + ad * (0.5 - t)) * f
           let h = t * (1.0 - t) * ad * f
           lam_i -= g
-          lam[j] = lam[j] + g
+          lam.unsafe_set(j, lam.unsafe_get(j) + g)
           hes_i += h
-          hes[j] = hes[j] + h
+          hes.unsafe_set(j, hes.unsafe_get(j) + h)
+          sum_l += g.abs()
+        }
+      } else if ndcg {
+        // without branches: a pair of equal labels has no gain gap and adds
+        // nothing; with t the model's chance that i is ahead, the better
+        // labelled one is pushed up by (1 - its chance) times the weight
+        // indices are below cnt, within every scratch array and disc
+        for j in (i + 1)..<cnt {
+          let ej = ex.unsafe_get(j)
+          let e = ei + ej
+          let w = c + (si - sc.unsafe_get(j)).abs()
+          let r = 1.0 / (e * w)
+          let t = ei * w * r
+          let dg = gi - gn.unsafe_get(j)
+          let ad = dg.abs()
+          let f = (di - disc.unsafe_get(j)) * inv * e * r
+          let g = (0.5 * dg + ad * (0.5 - t)) * f
+          let h = t * (1.0 - t) * ad * f
+          lam_i -= g
+          lam.unsafe_set(j, lam.unsafe_get(j) + g)
+          hes_i += h
+          hes.unsafe_set(j, hes.unsafe_get(j) + h)
           sum_l += g.abs()
         }
       } else {
@@ -136,6 +212,11 @@ fn rank_gradients(
   }
   out
 }
+
+///|
+/// Distinct labels a query may have for rank_gradients to skip the pairs
+/// of equal labels; queries with more take every pair.
+let max_classes : Int32 = 8
 
 ///|
 fn gain(label : Double) -> Double {

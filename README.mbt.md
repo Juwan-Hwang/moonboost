@@ -189,19 +189,20 @@ XGBoost's with the same settings:
 
 `reg:absoluteerror` and `reg:quantileerror` (`quantile_alpha`) grow each
 tree on the loss's gradients and then set every leaf to eta times the
-alpha quantile of its rows' residuals. On 20,000 synthetic rows with
-heavy-tailed noise, three seeds, 100 rounds, depth 6
+alpha quantile of its rows' residuals. On 100,000 synthetic rows with
+heavy-tailed noise (80,000 to train), four seeds, 100 rounds, depth 6
 (`bench/train_quantile.py`), XGBoost again predicts the same bits; mean
 held-out pinball loss with `min_data_in_leaf: 20` (LightGBM's default):
 
 | Objective | moonboost | XGBoost 3.4.1 `hist` | LightGBM 4.7.0 |
 |---|---|---|---|
-| `reg:absoluteerror` | 0.67368 | 0.68056 | 0.67464 |
-| `reg:quantileerror`, alpha 0.1 | 0.39308 | 0.39019 | 0.39078 |
-| `reg:quantileerror`, alpha 0.9 | 0.42441 | 0.42479 | 0.42346 |
+| `reg:absoluteerror` | 0.67929 | 0.68250 | 0.67902 |
+| `reg:quantileerror`, alpha 0.1 | 0.41051 | 0.41452 | 0.41021 |
+| `reg:quantileerror`, alpha 0.9 | 0.41214 | 0.41581 | 0.41162 |
 
-Without `min_data_in_leaf` the absolute loss is 0.67621 and the quantile
-losses 0.39413 and 0.42786.
+moonboost's loss is about 0.5% below XGBoost's (five to ten standard
+errors per seed) and 0.05 to 0.13% above LightGBM's (about one standard
+error per seed).
 
 Training also runs in the browser, and every build makes the same model bit
 for bit. `webgc/` is a 37 KB WebAssembly GC module with a loader,

@@ -215,6 +215,43 @@ pub fn train(
       eta
     },
   }
+  train_fixed(data, cols, labels, params)
+}
+
+///|
+/// Train with XGBoost's parameters as a JSON object, `JSON.stringify` of
+/// what you would pass to `xgboost.train` (`{"objective": "rank:ndcg",
+/// "group": [10, 7], "eta": 0.1, "grow_policy": "lossguide",
+/// "max_leaves": 255, "categorical": [0, 3]}`); every training setting of
+/// the library is available. Returns the model as XGBoost JSON text, or
+/// `undefined` with `last_error()` set.
+#export_name("train_with")
+pub fn train_with(
+  data : FixedArray[Double],
+  cols : Int32,
+  labels : FixedArray[Double],
+  params : String,
+) -> String? {
+  let p = @moonboost.TrainParams::from_json(params) catch {
+    @moonboost.InvalidModel(msg) => {
+      error.val = "invalid input: " + msg
+      return None
+    }
+    @moonboost.Unsupported(msg) => {
+      error.val = "unsupported: " + msg
+      return None
+    }
+  }
+  train_fixed(data, cols, labels, p)
+}
+
+///|
+fn train_fixed(
+  data : FixedArray[Double],
+  cols : Int32,
+  labels : FixedArray[Double],
+  params : @moonboost.TrainParams,
+) -> String? {
   try {
     let m = @moonboost.DenseMatrix::from_fixed(to_float_matrix(data), cols~)
     let y = to_float_matrix(labels)

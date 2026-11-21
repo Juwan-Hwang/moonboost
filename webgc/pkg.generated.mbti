@@ -10,7 +10,13 @@ pub fn train_error_char(Int32) -> Int32
 
 pub fn train_label(Int32, Double) -> Unit
 
+pub fn train_params_alloc(Int32) -> Unit
+
+pub fn train_params_char(Int32, Int32) -> Unit
+
 pub fn train_run(Int32, Int32, Int32, Int32, Double) -> Int32
+
+pub fn train_run_params() -> Int32
 
 pub fn train_set(Int32, Double) -> Unit
 

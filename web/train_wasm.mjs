@@ -5,6 +5,9 @@
 //   import { loadTrainer } from "./train_wasm.mjs";
 //   const train = await loadTrainer("webgc.wasm");
 //   const json = train(data, cols, labels, "binary:logistic", -1, 100, 6, 0.3);
+//   // or any of XGBoost's training parameters as an object:
+//   const ranker = train(data, cols, labels,
+//     { objective: "rank:ndcg", group: [10, 7, 12], eta: 0.1 });
 
 const OBJECTIVES = {
   "reg:squarederror": 0,
@@ -43,12 +46,27 @@ export async function loadTrainer(source) {
     if (data.length !== rows * cols) {
       throw new Error(`${data.length} values for ${rows} rows of ${cols}`);
     }
-    const code = objective === "" ? -1 : OBJECTIVES[objective];
-    if (code === undefined) throw new Error(`unsupported: training objective ${objective}`);
+    const params = typeof objective === "object" && objective !== null
+      ? JSON.stringify(objective) : null;
+    const code = params !== null || objective === "" ? -1 : OBJECTIVES[objective];
+    if (code === undefined) {
+      // any other objective goes through the parameter object
+      return train(data, cols, labels, { objective, ...(numClass >= 0 && { num_class: numClass }),
+        ...(numRound >= 0 && { num_round: numRound }), ...(maxDepth >= 0 && { max_depth: maxDepth }),
+        ...(eta >= 0 && { eta }) });
+    }
     x.train_alloc(rows, cols);
     for (let i = 0; i < data.length; i++) x.train_set(i, data[i]);
     for (let i = 0; i < rows; i++) x.train_label(i, labels[i]);
-    const n = x.train_run(code, numClass, numRound, maxDepth, eta);
+    let n;
+    if (params !== null) {
+      x.train_params_alloc(params.length);
+      for (let i = 0; i < params.length; i++) x.train_params_char(i, params.charCodeAt(i));
+      n = x.train_run_params();
+      x.train_params_alloc(0);
+    } else {
+      n = x.train_run(code, numClass, numRound, maxDepth, eta);
+    }
     x.train_alloc(0, 0);
     if (n < 0) throw new Error(read(x.train_error_char(-1), x.train_error_char));
     return read(n, x.train_char);

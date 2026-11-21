@@ -32,6 +32,8 @@ const USAGE : String =
   #|  --subsample 1  --sampling-method uniform|gradient_based
   #|  --colsample-bytree 1  --colsample-bynode 1  --seed 0
   #|  --min-data-in-leaf 0
+  #|  --params params.json  (XGBoost parameter names as a JSON object; later
+  #|    options override it)
   #|labels.csv holds one label per line. The model is written as XGBoost JSON.
   #|
   #|Models are XGBoost JSON files (Booster.save_model("model.json")) or
@@ -318,6 +320,15 @@ fn train(args : ArrayView[String]) -> Unit raise {
       "--colsample-bynode" => p = { ..p, colsample_bynode: num(), }
       "--seed" => p = { ..p, seed: @string.parse_int(next()), }
       "--min-data-in-leaf" => p = { ..p, min_data_in_leaf: num(), }
+      "--params" => {
+        let src = next()
+        let text = if src.trim_start(chars=" \t\r\n").has_prefix("{") {
+          src
+        } else {
+          @fs.read_file_to_string(src)
+        }
+        p = @moonboost.TrainParams::from_json(text)
+      }
       "--rank-truncation" =>
         p = { ..p, rank_truncation: @string.parse_int(next()), }
       "--group" => {

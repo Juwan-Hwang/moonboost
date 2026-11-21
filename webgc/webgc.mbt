@@ -82,6 +82,65 @@ pub fn train_run(
       eta
     },
   }
+  run(params)
+}
+
+///|
+/// Code unit `i` of the trained model's text.
+pub fn train_char(i : Int32) -> Int32 {
+  text.val.code_unit_at(i).to_int()
+}
+
+///|
+/// Code unit `i` of the last error message, or its length for `i = -1`.
+pub fn train_error_char(i : Int32) -> Int32 {
+  if i < 0 {
+    error.val.length()
+  } else {
+    error.val.code_unit_at(i).to_int()
+  }
+}
+
+///|
+let param_text : Ref[FixedArray[Int32]] = Ref(FixedArray::make(0, 0))
+
+///|
+/// Makes room for training parameters given as `n` UTF-16 code units of
+/// JSON (XGBoost's names, as for `train_with` in the ES module).
+pub fn train_params_alloc(n : Int32) -> Unit {
+  param_text.val = FixedArray::make(n, 0)
+}
+
+///|
+/// Sets code unit `i` of the parameters' JSON text.
+pub fn train_params_char(i : Int32, c : Int32) -> Unit {
+  param_text.val[i] = c
+}
+
+///|
+/// Trains on the rows set so far with the parameters' JSON text; returns
+/// as `train_run` does.
+pub fn train_run_params() -> Int32 {
+  let units = param_text.val
+  let buf = StringBuilder(capacity=units.length())
+  for c in units {
+    buf.write_char(Int32::unsafe_to_char(c))
+  }
+  let p = @moonboost.TrainParams::from_json(buf.to_string()) catch {
+    @moonboost.InvalidModel(msg) => {
+      error.val = "invalid input: " + msg
+      return -1
+    }
+    @moonboost.Unsupported(msg) => {
+      error.val = "unsupported: " + msg
+      return -1
+    }
+  }
+  run(p)
+}
+
+///|
+fn run(params : @moonboost.TrainParams) -> Int32 {
   text.val = ""
   try {
     let m = @moonboost.DenseMatrix::from_fixed(data.val, cols=columns.val)
@@ -102,21 +161,5 @@ pub fn train_run(
       error.val = "unsupported: " + msg
       -1
     }
-  }
-}
-
-///|
-/// Code unit `i` of the trained model's text.
-pub fn train_char(i : Int32) -> Int32 {
-  text.val.code_unit_at(i).to_int()
-}
-
-///|
-/// Code unit `i` of the last error message, or its length for `i = -1`.
-pub fn train_error_char(i : Int32) -> Int32 {
-  if i < 0 {
-    error.val.length()
-  } else {
-    error.val.code_unit_at(i).to_int()
   }
 }

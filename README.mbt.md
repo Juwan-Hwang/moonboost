@@ -613,7 +613,11 @@ and `predict_lightgbm_raw(model, row)`. An XGBoost `.ubj` file loads with
 `load_model_ubjson(bytes)`, where `bytes` is a `Uint8Array`.
 `train(rows, cols, labels, objective, num_class, num_round, max_depth, eta)`
 trains in the page and returns XGBoost JSON text (`-1` or `""` keeps a
-default). For two to three times the speed, train with the WebAssembly GC module
+default). `train_with(rows, cols, labels, JSON.stringify(params))` takes
+XGBoost's parameter names instead, with every training setting: any
+objective, `group` for ranking, `categorical`, `grow_policy`,
+`subsample`, `quantile_alpha` and the rest
+(`TrainParams::from_json` in MoonBit). For two to three times the speed, train with the WebAssembly GC module
 (build it with `moon build --target wasm-gc --release`; it is
 `_build/wasm-gc/release/build/webgc/webgc.wasm`):
 
@@ -621,6 +625,8 @@ default). For two to three times the speed, train with the WebAssembly GC module
 import { loadTrainer } from "./train_wasm.mjs";
 const train = await loadTrainer("webgc.wasm");
 const json = train(rows, cols, labels, "binary:logistic", -1, 100, 6, 0.3);
+// or a parameter object, as for train_with
+const ranker = train(rows, cols, labels, { objective: "rank:ndcg", group, eta: 0.1 });
 ```
 
 See `examples/node/iris.mjs`.

@@ -471,3 +471,52 @@ test "rank:ndcg and rank:pairwise order the documents of each query" {
   }
   assert_eq(bad, "error")
 }
+
+///|
+test "TrainParams::from_json reads XGBoost names and aliases" {
+  let p = @moonboost.TrainParams::from_json(
+    (
+      #|{"objective": "reg:quantileerror", "learning_rate": "0.05",
+      #| "max_depth": 8, "n_estimators": 50, "reg_lambda": 2,
+      #| "categorical": "0, 3", "quantile_alpha": 0.9, "group": [2, 3],
+      #| "grow_policy": "lossguide", "max_leaves": 31}
+    ),
+  )
+  assert_eq(p.objective, "reg:quantileerror")
+  assert_eq(p.eta, 0.05)
+  assert_eq(p.max_depth, 8)
+  assert_eq(p.num_round, 50)
+  assert_eq(p.lambda, 2.0)
+  assert_eq(p.categorical, [0, 3])
+  assert_eq(p.quantile_alpha, 0.9)
+  assert_eq(p.group, [2, 3])
+  assert_eq(p.grow_policy, "lossguide")
+  assert_eq(p.max_leaves, 31)
+  assert_eq(p.min_child_weight, 1.0)
+  let d = @moonboost.TrainParams::from_json("{}")
+  assert_eq(d.num_round, @moonboost.TrainParams::default().num_round)
+  assert_true(
+    try {
+      ignore(@moonboost.TrainParams::from_json("{\"nope\": 1}"))
+      false
+    } catch {
+      _ => true
+    },
+  )
+  assert_true(
+    try {
+      ignore(@moonboost.TrainParams::from_json("{\"max_depth\": 2.5}"))
+      false
+    } catch {
+      _ => true
+    },
+  )
+  assert_true(
+    try {
+      ignore(@moonboost.TrainParams::from_json("[1]"))
+      false
+    } catch {
+      _ => true
+    },
+  )
+}

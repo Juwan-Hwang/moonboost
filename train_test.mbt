@@ -286,7 +286,7 @@ test "the other regression and binary objectives fit their targets" {
   let (x, y) = toy(3000)
   let objectives = [
     "count:poisson", "reg:gamma", "reg:tweedie", "reg:pseudohubererror", "reg:squaredlogerror",
-    "reg:logistic", "binary:logitraw",
+    "reg:logistic", "binary:logitraw", "reg:absoluteerror",
   ]
   for o in objectives {
     // labels in each objective's domain, from y in about [-5, 5]
@@ -334,6 +334,37 @@ test "the other regression and binary objectives fit their targets" {
     let constant = err(0)
     assert_true(fitted < constant * 0.5, msg="\{o}: \{fitted} vs \{constant}")
   }
+}
+
+///|
+test "reg:quantileerror predicts the asked quantile" {
+  let (x, y) = toy(3000)
+  for alpha in [0.1, 0.5, 0.9] {
+    let json = @moonboost.train_xgboost_json(x, y, params={
+      ..@moonboost.TrainParams::default(),
+      objective: "reg:quantileerror",
+      quantile_alpha: alpha,
+      num_round: 60,
+      max_depth: 4,
+    })
+    let p = @moonboost.Model::from_xgboost_json(json).predict_batch(x)
+    let mut below = 0
+    for i in 0..<y.length() {
+      if y[i].to_double() <= p[i].to_double() {
+        below += 1
+      }
+    }
+    let share = below.to_double() / y.length().to_double()
+    assert_true((share - alpha).abs() < 0.08, msg="\{alpha}: \{share}")
+  }
+  let bad = @moonboost.train_xgboost_json(x, y, params={
+    ..@moonboost.TrainParams::default(),
+    objective: "reg:quantileerror",
+    quantile_alpha: 1.0,
+  }) catch {
+    _ => "error"
+  }
+  assert_eq(bad, "error")
 }
 
 ///|

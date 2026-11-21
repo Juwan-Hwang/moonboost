@@ -264,26 +264,33 @@ fn bin_block(
 }
 
 ///|
-/// One-byte bins of feature f for rows lo..hi: the bin less `adj`, into
-/// the row words and the feature-major bytes.
+/// One-byte bins of the features of word w for rows lo..hi: each bin less
+/// its feature's `adj`, into the row words (each word written once) and
+/// the feature-major bytes.
 fn pack_block(
   by_col : U16s,
   bins8 : Words,
   by8 : FixedArray[Byte],
   words : Int32,
   n : Int32,
-  f : Int32,
-  adj : Int32,
+  cols : Int32,
+  w : Int32,
+  adjs : FixedArray[Int32],
   lo : Int32,
   hi : Int32,
 ) -> Unit {
-  let column = f / word_bins
-  let shift = f % word_bins * 8
+  let f0 = w * word_bins
+  let f1 = if f0 + word_bins < cols { f0 + word_bins } else { cols }
   for r in lo..<hi {
-    let b = (by_col.unsafe_get(f * n + r).to_int() - adj).to_byte()
-    let at = r * words + column
-    bins8.unsafe_set(at, word_put(bins8.unsafe_get(at), b, shift))
-    by8.unsafe_set(f * n + r, b)
+    let at = r * words + w
+    // the word is still zero: it is built whole and stored once
+    let mut x = bins8.unsafe_get(at)
+    for f in f0..<f1 {
+      let b = (by_col.unsafe_get(f * n + r).to_int() - adjs.unsafe_get(f)).to_byte()
+      by8.unsafe_set(f * n + r, b)
+      x = word_put(x, b, (f - f0) * 8)
+    }
+    bins8.unsafe_set(at, x)
   }
 }
 
@@ -2524,10 +2531,27 @@ fn train_json(
   if narrow {
     // one-byte bins: the bin, plus one for a feature with missing values
     // (whose missing bin is 0)
-    for f in 0..<cols {
-      let adj = if binned.missing[f] { 0 } else { 1 }
+    let adjs = FixedArray::makei(cols, f => {
+      if binned.missing[f] {
+        0
+      } else {
+        1
+      }
+    })
+    for w in 0..<words {
       for lo = 0; lo < n; lo = lo + block {
-        pack_block(by_col, bins8, by8, words, n, f, adj, lo, block_end(lo, n))
+        pack_block(
+          by_col,
+          bins8,
+          by8,
+          words,
+          n,
+          cols,
+          w,
+          adjs,
+          lo,
+          block_end(lo, n),
+        )
       }
     }
   } else {

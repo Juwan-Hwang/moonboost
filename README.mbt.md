@@ -134,13 +134,13 @@ thread on one core of the VM above (`bench/airline_categorical.py`):
 
 | Leaves | moonboost | LightGBM 4.7.0 | XGBoost 3.4.1 `hist` |
 |---|---|---|---|
-| 255 | 6.8 s, AUC 0.7629 | 6.5 s, AUC 0.7612 | 20.4 s, AUC 0.7547 |
-| 1023 | 10.7 s, AUC 0.7779 | 9.6 s, AUC 0.7761 | 37.1 s, AUC 0.7638 |
-| 4095 | 19.7 s, AUC 0.7868 | 19.6 s, AUC 0.7829 | 56.2 s, AUC 0.7655 |
+| 255 | 6.9 s, AUC 0.7629 | 6.5 s, AUC 0.7612 | 20.5 s, AUC 0.7547 |
+| 1023 | 8.8 s, AUC 0.7779 | 9.2 s, AUC 0.7761 | 32.8 s, AUC 0.7638 |
+| 4095 | 16.1 s, AUC 0.7868 | 19.8 s, AUC 0.7829 | 53.9 s, AUC 0.7655 |
 
 At every size moonboost's model is the most accurate. At 4095 leaves it
-trains in the same time as LightGBM with 0.004 more AUC; at 255 and 1023
-leaves LightGBM is 5 to 10% faster. With the categories label-encoded
+trains 19% faster than LightGBM and at 1023 leaves 4% faster; at 255
+leaves LightGBM is about as fast (moonboost took 6.4 s in another run). With the categories label-encoded
 instead, moonboost reaches 0.7520 at depth 10.
 
 ### Sampling and other objectives

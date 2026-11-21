@@ -201,7 +201,7 @@ held-out pinball loss with `min_data_in_leaf: 20` (LightGBM's default):
 | `reg:quantileerror`, alpha 0.9 | 0.41214 | 0.41581 | 0.41162 |
 
 moonboost's loss is about 0.5% below XGBoost's (five to ten standard
-errors per seed) and 0.05 to 0.13% above LightGBM's (about one standard
+errors per seed) and 0.04 to 0.13% above LightGBM's (about one standard
 error per seed).
 
 Training also runs in the browser, and every build makes the same model bit

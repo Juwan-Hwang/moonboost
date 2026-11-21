@@ -221,11 +221,11 @@ binning:
 
 | | moonboost | XGBoost 3.4.1 `hist` | LightGBM 4.7.0 |
 |---|---|---|---|
-| Training time | 40.0 to 41.3 s | 60.5 s | 42.9 s |
+| Training time | 38.4 s | 59.4 s | 42.0 s |
 | NDCG@10 | 0.5051 | 0.5042 | 0.5042 |
 
 The NDCG difference (+0.0010, standard error 0.0019 over queries) is not
-significant. With all pairs (`rank_truncation: 0`) moonboost takes 52.3 s
+significant. With all pairs (`rank_truncation: 0`) moonboost takes 46.0 s
 for 0.5020.
 
 `rank:pairwise` on the same data: moonboost 38.9 to 39.4 s for 0.4915,

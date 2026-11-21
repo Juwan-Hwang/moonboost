@@ -130,8 +130,8 @@ fn predict(args : ArrayView[String]) -> Unit raise {
   }
   let header = args.contains("--header")
   let text = read_text(files[0])
-  let data = @moonboost.DenseMatrix::from_csv(
-    @fs.read_file_to_string(files[1]),
+  let data = @moonboost.DenseMatrix::from_csv_bytes(
+    @fs.read_file_to_bytes(files[1])[:],
     header~,
   )
   if is_lightgbm(text) {
@@ -208,8 +208,8 @@ fn bench(args : ArrayView[String]) -> Unit raise {
   if is_lightgbm(text0) {
     let m = @moonboost.LightGBMModel::from_text(text0)
     println("load:       \{(@env.now() - tl).to_double()} ms")
-    let data = @moonboost.DenseMatrix::from_csv(
-      @fs.read_file_to_string(files[1]),
+    let data = @moonboost.DenseMatrix::from_csv_bytes(
+      @fs.read_file_to_bytes(files[1])[:],
       header=args.contains("--header"),
     )
     let rowsd = Array::makei(data.rows, r => data.row(r).map(x => x.to_double()))
@@ -234,8 +234,8 @@ fn bench(args : ArrayView[String]) -> Unit raise {
   let t0 = @env.now()
   let model = load_model(files[0])
   let t1 = @env.now()
-  let data = @moonboost.DenseMatrix::from_csv(
-    @fs.read_file_to_string(files[1]),
+  let data = @moonboost.DenseMatrix::from_csv_bytes(
+    @fs.read_file_to_bytes(files[1])[:],
     header=args.contains("--header"),
   )
   // warm up, and keep the result alive so the work is not optimised away
@@ -355,12 +355,12 @@ fn train(args : ArrayView[String]) -> Unit raise {
   if files.length() != 2 || out == "" {
     raise CliError("train needs <data.csv> <labels.csv> -o <model.json>")
   }
-  let data = @moonboost.DenseMatrix::from_csv(
-    @fs.read_file_to_string(files[0]),
+  let data = @moonboost.DenseMatrix::from_csv_bytes(
+    @fs.read_file_to_bytes(files[0])[:],
     header~,
   )
-  let labels = @moonboost.DenseMatrix::from_csv(
-    @fs.read_file_to_string(files[1]),
+  let labels = @moonboost.DenseMatrix::from_csv_bytes(
+    @fs.read_file_to_bytes(files[1])[:],
     header~,
   )
   let label = Array::makei(labels.rows, r => labels.row(r)[0])

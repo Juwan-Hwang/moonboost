@@ -73,3 +73,5 @@
 - 11-21 排序目标（main f00dd9d）：rank:ndcg（LambdaRank，LightGBM 式：截断 30、ΔNDCG/(0.01+|Δs|)、log2(1+s)/s 归一）与 rank:pairwise（RankNet）；group 参数、CLI --group/--rank-truncation；XGBoost 加载 2 万行逐位一致。MSLR-WEB10K fold1，单线程 100 轮 eta0.1 255 叶 mcw 0.001：mb 40.0–41.3 s / NDCG@10 .5051；LGB 42.9 s / .5042；XGB 60.5 s / .5042。差 +0.0010±0.0019（不显著）。全对 52.3 s / .5020。
 - 梯度优化：exp 每文档一次+一次除法+分支消除+Int64 键排序，梯度 33→18 s（2 叶 100 轮基准）；剩余每对约 3.5 ns。
 - 分箱按 16 列条带转置：MSLR 3 轮 4.7→3.2 s，模型逐字节相同。
+- 11-22 参数 JSON（main 1f9b81d，CI 绿）：TrainParams::from_json（XGBoost 名称+别名，数字可为字符串）；web train_with、webgc train_run_params（train_wasm.mjs 第 4 参数可传对象，非 4 种基础目标自动走对象）、CLI --params。浏览器端此前只能用 4 种目标与 5 个参数，现可用全部 15 目标/类别/采样/lossguide/排序。JS、wasm-gc、CLI 同参数模型逐字节一致。
+- 11-22 rank:pairwise MSLR（单线程 100 轮 255 叶）：mb 38.9–39.4 s / .4915；XGB 默认 pairwise 53.6 s / .4923（差 −.0008±.0023）；XGB topk30 54.1 s / .4875（差 +.0040±.0022）。均不显著；pairwise 截断 0：41.3 s / .4871（更差）。

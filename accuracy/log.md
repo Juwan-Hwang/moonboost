@@ -70,3 +70,6 @@
 - 11-21 4095 叶：moonboost 16.1 s .7868 vs LGB 19.8 s .7829 vs XGB 53.9 s .7655；255 叶本次 6.9 vs 6.5 s（另一次 6.4），持平。README 表已更新。
 - 11-21 大基准（10 万行，8 万训练，4 种子，mdil 20，逐行配对 se）：abs .67929 vs XGB .68250 / LGB .67902；q0.1 .41051/.41452/.41021；q0.9 .41214/.41581/.41162。对 XGB 显著领先（5–10 se），对 LGB 落后约 0.0004（约 1 se/种子，12 次中 10 次为正）。小基准“abs 三方最佳”不成立，README 已改为大基准结果。
 - 否决：lambda 0；lossguide 63 叶（对齐 LGB）；平滑 pinball 梯度（sigmoid，δ=0.1/0.3×平均|残差|，均更差，δ 越大越差）；LightGBM 分位数插值公式（dL 0.00036→0.00034，无差别）。quantile 与 LGB 的差距来源未定位。
+- 11-21 排序目标（main f00dd9d）：rank:ndcg（LambdaRank，LightGBM 式：截断 30、ΔNDCG/(0.01+|Δs|)、log2(1+s)/s 归一）与 rank:pairwise（RankNet）；group 参数、CLI --group/--rank-truncation；XGBoost 加载 2 万行逐位一致。MSLR-WEB10K fold1，单线程 100 轮 eta0.1 255 叶 mcw 0.001：mb 40.0–41.3 s / NDCG@10 .5051；LGB 42.9 s / .5042；XGB 60.5 s / .5042。差 +0.0010±0.0019（不显著）。全对 52.3 s / .5020。
+- 梯度优化：exp 每文档一次+一次除法+分支消除+Int64 键排序，梯度 33→18 s（2 叶 100 轮基准）；剩余每对约 3.5 ns。
+- 分箱按 16 列条带转置：MSLR 3 轮 4.7→3.2 s，模型逐字节相同。

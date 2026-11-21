@@ -59,3 +59,12 @@
 - MVS 阈值改为两遍精确解（按 double 高 16 位分桶 + 桶内排序），替代 40 次二分：6.70→4.82 s（−28%），模型字节不同但 10 万测试行预测完全相同。
 - 对手同参数（airline 带类别，subsample 0.5，100 轮）：255 叶 mb 4.0 s/.7619，LGB bagging0.5 11.3 s/.7596（不 bagging 6.4 s/.7612），XGB 22.2 s/.7471；1023 叶 mb 6.1/.7731，LGB 14.3/.7716（不 bagging 9.0/.7761），XGB 33.6/.7463。注意 LGB 不采样 1023 叶 AUC .7761 高于所有采样结果。
 - 结论：保留，已合入 main。
+
+## 11-21
+- 剖析（airline 带类别 lossguide 1023 叶，main）：histogram 32%、partition 28%、best_split 6%、gradients 5%、partition_copy 4%、malloc/free ~5%。加权平均叶深 13.8；partition ≈1.9 ns/行·层，已近极限。
+- H：原生端直方图缓冲按 slot 复用（同 JS），省分配。A/B 1023 叶 4 次：8.81/9.07/9.22 vs 8.74/9.26/9.20 s，噪声内。否决（未合入）。
+- 重新干净计时 1023 叶（核 2，同一会话）：moonboost 8.8 s AUC .7779，LightGBM 9.2 s .7761，XGBoost 32.8 s .7638——11-20 填充字节与采样改动后 1023 叶已不再慢于 LightGBM（此前 12% 差距来自旧版本/争用）。
+- 新目标 reg:absoluteerror、reg:quantileerror（7c85764）：按符号梯度长树，叶值改为叶内残差 alpha 分位数×eta（XGBoost Quantile 插值）；base_score 为标签分位数（与 XGBoost 3.4.1 写出的值一致）。XGBoost 加载逐位一致（3 种子×3 配置全 True）。
+- 合成数据（t(2) 噪声、异方差，3 种子平均 pinball）：默认参数 abs .67621 vs XGB .68056 / LGB .67464；q0.1 .39413 vs .39019/.39078；q0.9 .42786 vs .42479/.42346。加 min_data_in_leaf 20（LGB 默认）：abs .67368（三方最佳），q0.1 .39308（最差），q0.9 .42441（介于两者）。
+- 观察：XGBoost 3.4.1 的 quantileerror 叶值等于 base_weight，并非叶内残差分位数（原因未查）；我们把分位数叶换成 Newton 叶后更差（q0.1 .40041、q0.9 .43764 均值），故保留分位数叶。分位数目标不领先，如实记录。
+- 11-21 4095 叶：moonboost 16.1 s .7868 vs LGB 19.8 s .7829 vs XGB 53.9 s .7655；255 叶本次 6.9 vs 6.5 s（另一次 6.4），持平。README 表已更新。

@@ -1,0 +1,19 @@
+moonboost leaves  1023    16.4s  AUC 0.7779
+lightgbm  leaves  1023     9.3s  AUC 0.7761
+xgboost   leaves  1023    32.5s  AUC 0.7638
+moonboost leaves   255     6.4s  AUC 0.7629
+lightgbm  leaves   255     6.5s  AUC 0.7612
+xgboost   leaves   255    20.0s  AUC 0.7547
+moonboost leaves  1023     8.8s  AUC 0.7779
+lightgbm  leaves  1023     9.2s  AUC 0.7761
+xgboost   leaves  1023    32.8s  AUC 0.7638
+moonboost leaves  1023     9.7s  AUC 0.7779
+lightgbm  leaves  1023     9.2s  AUC 0.7761
+xgboost   leaves  1023    31.7s  AUC 0.7638
+moonboost leaves  4095    16.1s  AUC 0.7868
+lightgbm  leaves  4095    19.8s  AUC 0.7829
+xgboost   leaves  4095    53.9s  AUC 0.7655
+moonboost leaves   255     6.9s  AUC 0.7629
+lightgbm  leaves   255     6.5s  AUC 0.7612
+xgboost   leaves   255    20.5s  AUC 0.7547
+[exit 0 timedOut=False]

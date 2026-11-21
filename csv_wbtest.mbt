@@ -52,3 +52,21 @@ test "csv_cell gives the bits parse_double gives" {
   assert_eq(m.data[1], 2.5)
   assert_true(m.data[3].is_nan())
 }
+
+///|
+test "sort_keys sorts" {
+  let mut seed = 99UL
+  for n in [0, 1, 2, 15, 16, 17, 100, 1000] {
+    let a = FixedArray::make(n, 0UL)
+    for i in 0..<n {
+      seed = seed * 6364136223846793005UL + 1442695040888963407UL
+      a[i] = (seed >> 40 << 32) | i.to_uint64()
+    }
+    let b = Array::makei(n, i => a[i])
+    b.sort()
+    sort_keys(a, 0, n)
+    for i in 0..<n {
+      assert_eq(a[i], b[i])
+    }
+  }
+}

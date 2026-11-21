@@ -27,7 +27,7 @@ fn rank_gradients(
     }
   }
   // per-query scratch, sized for the longest query
-  let keys : Array[UInt64] = Array(capacity=longest)
+  let keys : FixedArray[UInt64] = FixedArray::make(longest, 0UL)
   let order = FixedArray::make(longest, 0)
   let sc = FixedArray::make(longest, 0.0)
   let lb = FixedArray::make(longest, 0.0)
@@ -51,14 +51,14 @@ fn rank_gradients(
     // documents by current score, best first (ties by position): sorted
     // as keys of the score's bits, flipped so larger sorts first, and the
     // position
-    keys.clear()
     for i in 0..<cnt {
       let b = margin[s + i].reinterpret_as_uint()
       let up = if (b & 0x80000000U) != 0U { b.lnot() } else { b | 0x80000000U }
-      keys.push((up.lnot().to_uint64() << 32) | i.to_uint64())
+      keys[i] = (up.lnot().to_uint64() << 32) | i.to_uint64()
     }
-    keys.sort()
-    for i, key in keys {
+    sort_keys(keys, 0, cnt)
+    for i in 0..<cnt {
+      let key = keys[i]
       order[i] = s + (key & 0xffffffffUL).to_int()
     }
     // the query in that order: scores, labels, gains, exp(score - best)
@@ -274,4 +274,68 @@ fn rank_inverse_max_dcg(
     out[q] = if max_dcg > 0.0 { 1.0 / max_dcg } else { 0.0 }
   }
   out
+}
+
+///|
+/// Sorts keys[lo:hi] in increasing order: a quicksort on median-of-three
+/// pivots, insertion sort below 16 keys. The keys are distinct, so any sort
+/// gives the same order.
+fn sort_keys(a : FixedArray[UInt64], lo : Int32, hi : Int32) -> Unit {
+  let mut lo = lo
+  let mut hi = hi
+  while hi - lo > 16 {
+    let mid = lo + (hi - lo) / 2
+    let x = a[lo]
+    let y = a[mid]
+    let z = a[hi - 1]
+    let p = if x < y {
+      if y < z {
+        y
+      } else if x < z {
+        z
+      } else {
+        x
+      }
+    } else if x < z {
+      x
+    } else if y < z {
+      z
+    } else {
+      y
+    }
+    let mut i = lo
+    let mut j = hi - 1
+    while i <= j {
+      while a.unsafe_get(i) < p {
+        i += 1
+      }
+      while a.unsafe_get(j) > p {
+        j -= 1
+      }
+      if i <= j {
+        let t = a.unsafe_get(i)
+        a.unsafe_set(i, a.unsafe_get(j))
+        a.unsafe_set(j, t)
+        i += 1
+        j -= 1
+      }
+    }
+    // recurse into the smaller side, loop on the larger
+    if j + 1 - lo < hi - i {
+      sort_keys(a, lo, j + 1)
+      lo = i
+    } else {
+      sort_keys(a, i, hi)
+      hi = j + 1
+    }
+  }
+  for i in (lo + 1)..<hi {
+    let v = a.unsafe_get(i)
+    let mut j = i
+    while j > lo && a.unsafe_get(j - 1) > v {
+      a.unsafe_set(j, a.unsafe_get(j - 1))
+      j -= 1
+    }
+    a.unsafe_set(j, v)
+  }
 }

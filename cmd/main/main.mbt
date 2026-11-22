@@ -20,7 +20,7 @@ const USAGE : String =
   #|  --objective reg:squarederror | binary:logistic | multi:softprob | multi:softmax
   #|    | reg:logistic | binary:logitraw | count:poisson | reg:gamma | reg:tweedie
   #|    | reg:pseudohubererror | reg:squaredlogerror | reg:absoluteerror
-  #|    | reg:quantileerror | rank:ndcg | rank:pairwise
+  #|    | reg:quantileerror | rank:ndcg | rank:pairwise | binary:hinge
   #|  --group sizes.txt  (rank: one query size per line, rows in order)
   #|  --rank-truncation 30  (rank: pair only within the top N, 0 all)
   #|  --tweedie-variance-power 1.5  --huber-slope 1  --quantile-alpha 0.5

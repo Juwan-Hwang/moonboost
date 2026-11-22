@@ -2146,6 +2146,17 @@ fn Grower::gradients(
       }
       // rank:ndcg and rank:pairwise, computed per query beforehand
       9 => (probs[r * 2], probs[r * 2 + 1])
+      // binary:hinge on labels -1 and 1: a margin short of 1 on the right
+      // side pulls with weight 1, otherwise XGBoost's smallest float
+      // hessian and no gradient
+      10 => {
+        let t = 2.0 * y - 1.0
+        if m * t < 1.0 {
+          (-t, 1.0)
+        } else {
+          (0.0, 1.1754943508222875e-38)
+        }
+      }
       _ => {
         let pr = probs[r * groups + k]
         let t = if y.to_int() == k { 1.0 } else { 0.0 }
@@ -2339,6 +2350,7 @@ fn train_json(
     | "binary:logistic"
     | "reg:logistic"
     | "binary:logitraw"
+    | "binary:hinge"
     | "count:poisson"
     | "reg:gamma"
     | "reg:tweedie"
@@ -2361,7 +2373,7 @@ fn train_json(
       raise InvalidModel("missing label")
     }
     match p.objective {
-      "binary:logistic" | "reg:logistic" | "binary:logitraw" =>
+      "binary:logistic" | "reg:logistic" | "binary:logitraw" | "binary:hinge" =>
         if y < 0.0 || y > 1.0 {
           raise InvalidModel("binary labels must be in [0, 1]")
         }
@@ -2472,6 +2484,13 @@ fn train_json(
       let b = Float::from_double(if mean < 1.0e-6 { 1.0e-6 } else { mean })
       ("[" + xgb_float_text(b) + "]", @math.ln(b.to_double()))
     }
+    "binary:hinge" => {
+      // XGBoost's intercept: one Newton step from a zero margin, where
+      // every row has gradient 1 - 2y and hessian 1, put through the
+      // class transform
+      let b : Float = if mean > 0.5 { 1.0 } else { 0.0 }
+      ("[" + xgb_float_text(b) + "]", b.to_double())
+    }
     "binary:logitraw" => {
       // stored and used as a margin
       let x = if mean < 1.0e-6 {
@@ -2509,6 +2528,7 @@ fn train_json(
     "reg:squaredlogerror" => 7
     "reg:absoluteerror" | "reg:quantileerror" => 8
     "rank:ndcg" | "rank:pairwise" => 9
+    "binary:hinge" => 10
     _ => 2
   }
   let is_cat = FixedArray::make(data.cols, false)

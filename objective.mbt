@@ -9,6 +9,8 @@ pub(all) enum Objective {
   Logistic(String)
   /// Log link: `count:poisson`, `reg:gamma`, `reg:tweedie`, `survival:cox`.
   Exp(String)
+  /// `binary:hinge`: class 1 when the margin is positive, else 0.
+  Hinge
   /// `multi:softprob`: per-class probabilities via softmax.
   Softprob(Int32)
   /// `multi:softmax`: index of the most likely class.
@@ -33,6 +35,7 @@ pub fn Objective::from_name(
     | "rank:map" => Identity(name)
     "binary:logistic" | "reg:logistic" => Logistic(name)
     "count:poisson" | "reg:gamma" | "reg:tweedie" | "survival:cox" => Exp(name)
+    "binary:hinge" => Hinge
     "multi:softprob" => Softprob(num_class)
     "multi:softmax" => Softmax(num_class)
     _ => raise Unsupported("objective \{name}")
@@ -44,6 +47,7 @@ pub fn Objective::from_name(
 pub fn Objective::name(self : Objective) -> String {
   match self {
     Identity(n) | Logistic(n) | Exp(n) => n
+    Hinge => "binary:hinge"
     Softprob(_) => "multi:softprob"
     Softmax(_) => "multi:softmax"
   }
@@ -78,6 +82,10 @@ pub fn Objective::transform(self : Objective, margins : Array[Float]) -> Unit {
     Exp(_) =>
       for i in 0..<margins.length() {
         margins[i] = @math.expf(margins[i])
+      }
+    Hinge =>
+      for i in 0..<margins.length() {
+        margins[i] = if margins[i] > 0.0 { 1.0 } else { 0.0 }
       }
     Softprob(_) => {
       let mut wmax = margins[0]

@@ -94,6 +94,7 @@ pub(all) enum Objective {
   Identity(String)
   Logistic(String)
   Exp(String)
+  Hinge
   Softprob(Int32)
   Softmax(Int32)
 }

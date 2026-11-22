@@ -537,3 +537,39 @@ test "TrainParams::from_json keeps unnamed settings of base" {
   assert_eq(p.eta, 0.2)
   assert_eq(p.objective, "rank:ndcg")
 }
+
+///|
+test "binary:hinge trains a classifier that predicts 0 or 1" {
+  let rows = 200
+  let data = Array::makei(rows * 2, i => {
+    let r = i / 2
+    if i % 2 == 0 {
+      Float::from_int(r % 20)
+    } else {
+      Float::from_int(r % 7)
+    }
+  })
+  let label : Array[Float] = Array::makei(rows, r => {
+    if r % 20 >= 10 {
+      1.0
+    } else {
+      0.0
+    }
+  })
+  let m = @moonboost.DenseMatrix::new(data, cols=2)
+  let json = @moonboost.train_xgboost_json(m, label[:], params={
+    ..@moonboost.TrainParams::default(),
+    objective: "binary:hinge",
+    num_round: 5,
+  })
+  let model = @moonboost.Model::from_xgboost_json(json)
+  let mut right = 0
+  for r in 0..<rows {
+    let p = model.predict(m.row(r))[0]
+    assert_true(p == 0.0 || p == 1.0)
+    if p == label[r] {
+      right += 1
+    }
+  }
+  assert_eq(right, rows)
+}

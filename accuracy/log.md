@@ -89,3 +89,6 @@
 - 11-22 分箱：四趟基数排序的字节计数一次扫完、16 列条带拷贝缓冲放局部变量（MSLR 1 轮总时间 4.09→3.97 s，GBM-perf 不变，模型逐字节同，af0163b）。perf：建数据剩余热点为基数排序散写与二分查找。
 - 11-22 新目标 binary:hinge（378347e）：GBM-perf 80 万训练/20 万测试，100 轮 eta0.1：depth6 mb 2.2 s/.8144 vs XGB 4.7 s/.8145；depth10 3.2 s/.8237 vs 6.7 s/.8229；XGBoost 加载逐位一致；截距同 XGBoost（均值>0.5 取 1）。
 - 11-22 新目标 survival:cox（beb6776）：合成 25 万行 38% 删失，200 轮 eta0.05：depth4 mb 1.3 s/C .7515 vs XGB 1.8 s/.7518；depth6 1.6 s/.7565 vs 2.5 s/.7559；逐位一致。exp 只算一次（2.2→1.6 s）。共 17 种目标。
+- 11-23 rank:map（a580815）：XGBoost DeltaMAP 加权的 LambdaRank，0/1 标签。MSLR（相关度≥1 记为相关）100 轮 255 叶两次：mb 37.5–38.3 s MAP .6443，XGB 55.0–56.6 s .6419，LGB lambdarank 38.9–39.1 s .6427；对 XGB +0.0024±0.0009（显著），对 LGB +0.0016±0.0011（不显著）；XGBoost 逐位一致。
+- 11-23 survival:aft（f08bf28）：区间删失，normal/logistic/extreme，XGBoost 梯度/截断/极限；erf 用 fdlibm 有理式、aft_exp=train_exp(x/16)^16 保证各后端同模型。合成 25 万行（50% 观测/25% 右/10% 左/15% 区间）200 轮 eta0.05：速度 1.4–2.4× 于 XGB，逐位一致。
+- 11-23 假设：AFT 从最大似然常数起步而非 XGBoost 固定 0.5。4 个数据种子 depth4（逐行 nll 配对）：extreme 改善 0.013–0.024（稳定）、normal 改善 0.002–0.005、logistic 变差 0.003–0.007（4/4）。净收益为正，采用；logistic 变差原因未明（截距是精确 MLE）。extreme 截距与 scipy MLE 不同（1.72 vs 2.18）是因梯度截断 ±15，训练目标一致，不改。

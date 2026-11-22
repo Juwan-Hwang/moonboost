@@ -327,7 +327,7 @@ fn train(args : ArrayView[String]) -> Unit raise {
         } else {
           @fs.read_file_to_string(src)
         }
-        p = @moonboost.TrainParams::from_json(text)
+        p = @moonboost.TrainParams::from_json(text, base=p)
       }
       "--rank-truncation" =>
         p = { ..p, rank_truncation: @string.parse_int(next()), }

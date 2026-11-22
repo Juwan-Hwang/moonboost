@@ -520,3 +520,20 @@ test "TrainParams::from_json reads XGBoost names and aliases" {
     },
   )
 }
+
+///|
+test "TrainParams::from_json keeps unnamed settings of base" {
+  let base = {
+    ..@moonboost.TrainParams::default(),
+    group: [2, 3],
+    num_round: 7,
+  }
+  let p = @moonboost.TrainParams::from_json(
+    "{\"objective\": \"rank:ndcg\", \"eta\": 0.2}",
+    base~,
+  )
+  assert_eq(p.group, [2, 3])
+  assert_eq(p.num_round, 7)
+  assert_eq(p.eta, 0.2)
+  assert_eq(p.objective, "rank:ndcg")
+}

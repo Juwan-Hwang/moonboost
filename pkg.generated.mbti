@@ -136,7 +136,7 @@ pub(all) struct TrainParams {
   rank_truncation : Int32
 }
 pub fn TrainParams::default() -> Self
-pub fn TrainParams::from_json(StringView) -> Self raise ModelError
+pub fn TrainParams::from_json(StringView, base? : Self) -> Self raise ModelError
 
 pub struct Tree {
   left : Array[Int32]

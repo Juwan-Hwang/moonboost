@@ -1,13 +1,15 @@
 ///|
 /// Training settings from a JSON object of XGBoost parameter names, as
 /// passed to `xgboost.train` (`{"objective": "binary:logistic", "eta": 0.1,
-/// "max_depth": 8}`); unnamed settings keep `TrainParams::default()`.
+/// "max_depth": 8}`); unnamed settings keep `base`, which defaults to
+/// `TrainParams::default()`.
 /// Numbers may also be written as strings. Besides the fields of
 /// `TrainParams`, it accepts XGBoost's aliases `learning_rate`,
 /// `reg_lambda`, `min_split_loss`, `num_boost_round` and `n_estimators`,
 /// and `lambdarank_num_pair_per_sample` for `rank_truncation`.
 pub fn TrainParams::from_json(
   text : StringView,
+  base~ : TrainParams = TrainParams::default(),
 ) -> TrainParams raise ModelError {
   let j = @json.parse(text) catch {
     e => raise InvalidModel("invalid JSON: \{e}")
@@ -15,7 +17,7 @@ pub fn TrainParams::from_json(
   guard j is Object(m) else {
     raise InvalidModel("training parameters should be a JSON object")
   }
-  let mut p = TrainParams::default()
+  let mut p = base
   for key, v in m {
     p = p.with_setting(key, v)
   }

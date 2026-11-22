@@ -7,7 +7,8 @@
 /// loss of the score difference. For NDCG, the pair is weighted by the change
 /// in NDCG of swapping them, divided by 0.01 plus the score gap, and each
 /// query's gradients are scaled by log2(1 + s) / s, s the sum of their
-/// magnitudes.
+/// magnitudes. With `map`, for `rank:map` on 0/1 labels, the weight is the
+/// change in average precision instead, as XGBoost computes it.
 fn rank_gradients(
   label : ArrayView[Float],
   margin : FixedArray[Float],
@@ -15,6 +16,7 @@ fn rank_gradients(
   inv_max : FixedArray[Double],
   ndcg : Bool,
   truncation : Int32,
+  map~ : Bool = false,
 ) -> FixedArray[Double] {
   let n = label.length()
   let out = FixedArray::make(n * 2, 0.0)
@@ -35,6 +37,10 @@ fn rank_gradients(
   let ex = FixedArray::make(longest, 0.0)
   let lam = FixedArray::make(longest, 0.0)
   let hes = FixedArray::make(longest, 0.0)
+  // rank:map: relevant documents up to each position, and the sum of
+  // label / (position + 1) up to it
+  let nrel = FixedArray::make(if map { longest } else { 0 }, 0.0)
+  let acc = FixedArray::make(if map { longest } else { 0 }, 0.0)
   let cls = FixedArray::make(longest, 0)
   let labels = FixedArray::make(max_classes, 0.0)
   let other_len = FixedArray::make(max_classes, 0)
@@ -74,6 +80,16 @@ fn rank_gradients(
       ex[i] = if e < 1.0e-300 { 1.0e-300 } else { e }
       lam[i] = 0.0
       hes[i] = 0.0
+    }
+    if map {
+      let mut nr = 0.0
+      let mut ac = 0.0
+      for i in 0..<cnt {
+        nr += lb[i]
+        ac += lb[i] / (i + 1).to_double()
+        nrel[i] = nr
+        acc[i] = ac
+      }
     }
     // documents by label class (up to max_classes distinct labels), and
     // for each class the positions, in order, of the documents not in it
@@ -115,6 +131,7 @@ fn rank_gradients(
     // once the scores differ
     let c = if best != sc[cnt - 1] { 0.01 } else { 1.0 }
     let mut sum_l = 0.0
+    let total_rel = if map { nrel[cnt - 1] } else { 0.0 }
     for i in 0..<k {
       let li = lb[i]
       let si = sc[i]
@@ -123,7 +140,38 @@ fn rank_gradients(
       let di = disc[i]
       let mut lam_i = 0.0
       let mut hes_i = 0.0
-      if ndcg && classes > 0 {
+      if map {
+        // XGBoost's change in average precision of swapping positions i
+        // and j (i < j), over the query's relevant documents
+        let n = nrel[i]
+        let rh = (i + 1).to_double()
+        for j in (i + 1)..<cnt {
+          let lj = lb[j]
+          if li == lj {
+            continue
+          }
+          let m = nrel[j]
+          let rl = (j + 1).to_double()
+          let b = acc[j - 1] - acc[i]
+          let d = if li < lj {
+            (m / rl - (n + 1.0) / rh - b) / total_rel
+          } else {
+            (n / rh - m / rl + b) / total_rel
+          }
+          let ej = ex[j]
+          let e = ei + ej
+          let w = c + (si - sc[j]).abs()
+          let t = ei / e
+          let f = d.abs() / w
+          let g = if li > lj { (1.0 - t) * f } else { -t * f }
+          let h = t * (1.0 - t) * f
+          lam_i -= g
+          lam[j] = lam[j] + g
+          hes_i += h
+          hes[j] = hes[j] + h
+          sum_l += g.abs()
+        }
+      } else if ndcg && classes > 0 {
         // only the documents of other labels: a pair of equal labels adds
         // exactly zero, and the others come in the same increasing order,
         // so every sum is the same. With t the model's chance that i is
@@ -201,7 +249,7 @@ fn rank_gradients(
       out[order[i] * 2] = lam[i]
       out[order[i] * 2 + 1] = hes[i]
     }
-    if ndcg && sum_l > 0.0 {
+    if (ndcg || map) && sum_l > 0.0 {
       sum_l = 2.0 * sum_l
       let f = log2(1.0 + sum_l) / sum_l
       for i in s..<(s + cnt) {
@@ -244,7 +292,7 @@ fn discounts(starts : FixedArray[Int32]) -> FixedArray[Double] {
 ///|
 /// For each query, 1 over its best DCG at the truncation (all documents when
 /// 0) for `rank:ndcg`, 0 for a query of no relevant document; 1 for
-/// `rank:pairwise`.
+/// `rank:pairwise` and `rank:map`.
 fn rank_inverse_max_dcg(
   label : ArrayView[Float],
   starts : FixedArray[Int32],

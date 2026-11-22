@@ -28,7 +28,7 @@ trust because it is tested against XGBoost itself.
 | Feature | Status |
 |---|---|
 | XGBoost JSON models (`gbtree`) | done |
-| Objectives: `reg:*` (including `reg:absoluteerror` and `reg:quantileerror`), `binary:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `survival:cox`, `multi:softprob`, `multi:softmax`, `rank:ndcg`, `rank:pairwise` | done |
+| Objectives: `reg:*` (including `reg:absoluteerror` and `reg:quantileerror`), `binary:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `survival:cox`, `multi:softprob`, `multi:softmax`, `rank:ndcg`, `rank:pairwise`, `rank:map` | done |
 | Missing values (NaN, absent features) | done |
 | Categorical splits | done |
 | Leaf indices (`pred_leaf`) | done |
@@ -254,6 +254,22 @@ XGBoost 53.6 s for 0.4923 with its default pairs and 54.1 s for 0.4875 with
 `lambdarank_pair_method: topk` and 30 pairs per document; neither NDCG
 difference is significant (-0.0008 and +0.0040, standard errors 0.0023 and
 0.0022). LightGBM has no pairwise objective.
+
+`rank:map` takes 0/1 labels and weights each pair by XGBoost's change in
+average precision of swapping them, on the same pairs and with the same
+normalisation. MSLR-WEB10K as above with relevance of 1 or more counted as
+relevant, MAP on the test queries that have a relevant document
+(`bench/train_map.py`; LightGBM, which has no MAP objective, runs
+`lambdarank` on the same labels):
+
+| | moonboost | XGBoost 3.4.1 `hist` | LightGBM 4.7.0 `lambdarank` |
+|---|---|---|---|
+| Training time | 37.5 to 38.3 s | 55.0 to 56.6 s | 38.9 to 39.1 s |
+| MAP | 0.6443 | 0.6419 | 0.6427 |
+
+Against XGBoost the MAP difference is +0.0024 (standard error 0.0009 over
+queries); against LightGBM +0.0016 (0.0011), not significant. XGBoost
+predicts the same bits from the moonboost model.
 
 Training also runs in the browser, and every build makes the same model bit
 for bit. `webgc/` is a 37 KB WebAssembly GC module with a loader,

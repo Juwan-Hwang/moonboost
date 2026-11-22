@@ -575,6 +575,35 @@ test "binary:hinge trains a classifier that predicts 0 or 1" {
 }
 
 ///|
+test "rank:map orders the relevant documents of each query first" {
+  let (x, y) = toy(2000)
+  let rel = y.map(v => Float::from_int(if v > 0.5 { 1 } else { 0 }))
+  let group = Array::make(100, 20)
+  let flat = mean_ndcg(Array::make(2000, Float::from_double(0.0)), rel, 20)
+  let json = @moonboost.train_xgboost_json(x, rel, params={
+    ..@moonboost.TrainParams::default(),
+    objective: "rank:map",
+    group,
+    num_round: 30,
+    eta: 0.3,
+    max_depth: 4,
+  })
+  let m = @moonboost.Model::from_xgboost_json(json)
+  let score = mean_ndcg(m.predict_batch(x), rel, 20)
+  assert_true(score > 0.9 && score > flat + 0.2, msg="\{score} vs \{flat}")
+  // labels must be 0 or 1
+  let two = rel.map(v => v * 2.0)
+  let bad = @moonboost.train_xgboost_json(x, two, params={
+    ..@moonboost.TrainParams::default(),
+    objective: "rank:map",
+    group,
+  }) catch {
+    _ => "error"
+  }
+  assert_eq(bad, "error")
+}
+
+///|
 test "survival:cox ranks shorter times as higher hazard" {
   let rows = 300
   let data = Array::makei(rows, r => Float::from_int(r % 30))

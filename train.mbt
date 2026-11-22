@@ -2144,7 +2144,7 @@ fn Grower::gradients(
         let h = (ly - lp + 1.0) / ((pm + 1.0) * (pm + 1.0))
         ((lp - ly) / (pm + 1.0), if h < 1.0e-6 { 1.0e-6 } else { h })
       }
-      // rank:ndcg, rank:pairwise and survival:cox, computed beforehand
+      // rank:ndcg, rank:pairwise, rank:map and survival:cox, computed beforehand
       9 | 11 => (probs[r * 2], probs[r * 2 + 1])
       // binary:hinge on labels -1 and 1: a margin short of 1 on the right
       // side pulls with weight 1, otherwise XGBoost's smallest float
@@ -2360,7 +2360,8 @@ fn train_json(
     | "reg:absoluteerror"
     | "reg:quantileerror"
     | "rank:ndcg"
-    | "rank:pairwise" => 1
+    | "rank:pairwise"
+    | "rank:map" => 1
     "multi:softprob" | "multi:softmax" => {
       if p.num_class < 2 {
         raise InvalidModel("`num_class` must be at least 2")
@@ -2389,6 +2390,10 @@ fn train_json(
       "rank:ndcg" | "rank:pairwise" =>
         if y < 0.0 || y > 31.0 || y.to_int().to_double() != y.to_double() {
           raise InvalidModel("relevance labels must be integers in 0 .. 31")
+        }
+      "rank:map" =>
+        if y != 0.0 && y != 1.0 {
+          raise InvalidModel("rank:map labels must be 0 or 1")
         }
       "reg:squaredlogerror" =>
         if y <= -1.0 {
@@ -2422,7 +2427,9 @@ fn train_json(
     !(p.quantile_alpha > 0.0 && p.quantile_alpha < 1.0) {
     raise InvalidModel("quantile_alpha must be in (0, 1)")
   }
-  let is_rank = p.objective == "rank:ndcg" || p.objective == "rank:pairwise"
+  let is_rank = p.objective == "rank:ndcg" ||
+    p.objective == "rank:pairwise" ||
+    p.objective == "rank:map"
   if is_rank {
     let mut total = 0
     for c in p.group {
@@ -2535,7 +2542,7 @@ fn train_json(
     "reg:pseudohubererror" => 6
     "reg:squaredlogerror" => 7
     "reg:absoluteerror" | "reg:quantileerror" => 8
-    "rank:ndcg" | "rank:pairwise" => 9
+    "rank:ndcg" | "rank:pairwise" | "rank:map" => 9
     "binary:hinge" => 10
     "survival:cox" => 11
     _ => 2
@@ -2728,6 +2735,7 @@ fn train_json(
         rank_inv,
         p.objective == "rank:ndcg",
         p.rank_truncation,
+        map=p.objective == "rank:map",
       )
     } else {
       FixedArray::make(0, 0.0)
@@ -2878,7 +2886,7 @@ fn train_json(
       "reg:pseudohubererror" =>
         ",\"pseudo_huber_param\":{\"huber_slope\":\"\{p.huber_slope}\"}"
       "reg:squaredlogerror" | "reg:absoluteerror" => ""
-      "rank:ndcg" | "rank:pairwise" =>
+      "rank:ndcg" | "rank:pairwise" | "rank:map" =>
         ",\"lambdarank_param\":{\"lambdarank_bias_norm\":\"1\",\"lambdarank_normalization\":\"1\",\"lambdarank_num_pair_per_sample\":\"4294967295\",\"lambdarank_pair_method\":\"topk\",\"lambdarank_score_normalization\":\"1\",\"lambdarank_unbiased\":\"0\",\"ndcg_exp_gain\":\"1\"}"
       "reg:quantileerror" =>
         ",\"quantile_loss_param\":{\"quantile_alpha\":\"[\{p.quantile_alpha}]\"}"

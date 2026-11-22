@@ -573,3 +573,30 @@ test "binary:hinge trains a classifier that predicts 0 or 1" {
   }
   assert_eq(right, rows)
 }
+
+///|
+test "survival:cox ranks shorter times as higher hazard" {
+  let rows = 300
+  let data = Array::makei(rows, r => Float::from_int(r % 30))
+  // time grows with the feature; every fifth row is censored
+  let label : Array[Float] = Array::makei(rows, r => {
+    let t = Float::from_int(r % 30 + 1 + r / 30 % 3)
+    if r % 5 == 0 {
+      -t
+    } else {
+      t
+    }
+  })
+  let m = @moonboost.DenseMatrix::new(data, cols=1)
+  let json = @moonboost.train_xgboost_json(m, label[:], params={
+    ..@moonboost.TrainParams::default(),
+    objective: "survival:cox",
+    num_round: 20,
+    eta: 0.1,
+  })
+  let model = @moonboost.Model::from_xgboost_json(json)
+  let low = model.predict([(2.0 : Float)][:])[0]
+  let high = model.predict([(27.0 : Float)][:])[0]
+  assert_true(low > high)
+  assert_true(high > 0.0)
+}

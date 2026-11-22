@@ -28,7 +28,7 @@ trust because it is tested against XGBoost itself.
 | Feature | Status |
 |---|---|
 | XGBoost JSON models (`gbtree`) | done |
-| Objectives: `reg:*` (including `reg:absoluteerror` and `reg:quantileerror`), `binary:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `multi:softprob`, `multi:softmax`, `rank:ndcg`, `rank:pairwise` | done |
+| Objectives: `reg:*` (including `reg:absoluteerror` and `reg:quantileerror`), `binary:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `survival:cox`, `multi:softprob`, `multi:softmax`, `rank:ndcg`, `rank:pairwise` | done |
 | Missing values (NaN, absent features) | done |
 | Categorical splits | done |
 | Leaf indices (`pred_leaf`) | done |
@@ -42,7 +42,7 @@ trust because it is tested against XGBoost itself.
 | ES module for browsers and Node (`web/`) | done |
 | Browser demo (`docs/`, GitHub Pages) | done |
 | XGBoost UBJSON models (`.ubj`) | done |
-| Training: histogram trees for `reg:squarederror`, `reg:pseudohubererror`, `reg:squaredlogerror`, `binary:logistic`, `reg:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `multi:softprob`, `multi:softmax`, written as XGBoost JSON | done |
+| Training: histogram trees for `reg:squarederror`, `reg:pseudohubererror`, `reg:squaredlogerror`, `binary:logistic`, `reg:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `survival:cox`, `multi:softprob`, `multi:softmax`, written as XGBoost JSON | done |
 | Training: row and feature sampling (`subsample` with `uniform` or `gradient_based` rows, `colsample_bytree`, `colsample_bynode`), `min_data_in_leaf` | done |
 | Training: categorical features (one category against the rest, or a set of categories) | done |
 | Training: loss-guided growth (`grow_policy: "lossguide"`, `max_leaves`) | done |
@@ -196,6 +196,17 @@ the moonboost model:
 |---|---|---|---|---|
 | 6 | 2.2 s | 0.8144 | 4.7 s | 0.8145 |
 | 10 | 3.2 s | 0.8237 | 6.7 s | 0.8229 |
+
+`survival:cox` fits Cox proportional hazards with XGBoost's gradients
+(Breslow ties; a negative label is a time censored at its absolute
+value). On 250,000 synthetic rows with 38% censored (200,000 to train),
+one thread, 200 rounds, eta 0.05 (`bench/train_cox.py`), XGBoost predicts
+the same bits on the moonboost model; concordance on held-out rows:
+
+| Depth | moonboost time | C-index | XGBoost 3.4.1 time | C-index |
+|---|---|---|---|---|
+| 4 | 1.3 s | 0.7515 | 1.8 s | 0.7518 |
+| 6 | 1.6 s | 0.7565 | 2.5 s | 0.7559 |
 
 `reg:absoluteerror` and `reg:quantileerror` (`quantile_alpha`) grow each
 tree on the loss's gradients and then set every leaf to eta times the

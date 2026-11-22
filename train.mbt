@@ -2144,8 +2144,8 @@ fn Grower::gradients(
         let h = (ly - lp + 1.0) / ((pm + 1.0) * (pm + 1.0))
         ((lp - ly) / (pm + 1.0), if h < 1.0e-6 { 1.0e-6 } else { h })
       }
-      // rank:ndcg and rank:pairwise, computed per query beforehand
-      9 => (probs[r * 2], probs[r * 2 + 1])
+      // rank:ndcg, rank:pairwise and survival:cox, computed beforehand
+      9 | 11 => (probs[r * 2], probs[r * 2 + 1])
       // binary:hinge on labels -1 and 1: a margin short of 1 on the right
       // side pulls with weight 1, otherwise XGBoost's smallest float
       // hessian and no gradient
@@ -2351,6 +2351,7 @@ fn train_json(
     | "reg:logistic"
     | "binary:logitraw"
     | "binary:hinge"
+    | "survival:cox"
     | "count:poisson"
     | "reg:gamma"
     | "reg:tweedie"
@@ -2443,6 +2444,11 @@ fn train_json(
   } else {
     FixedArray::make(0, 0)
   }
+  let cox_rows = if p.objective == "survival:cox" {
+    cox_order(label)
+  } else {
+    FixedArray::make(0, 0)
+  }
   let rank_inv = if is_rank {
     rank_inverse_max_dcg(
       label,
@@ -2484,6 +2490,8 @@ fn train_json(
       let b = Float::from_double(if mean < 1.0e-6 { 1.0e-6 } else { mean })
       ("[" + xgb_float_text(b) + "]", @math.ln(b.to_double()))
     }
+    // the partial likelihood ignores a common shift: a hazard ratio of 1
+    "survival:cox" => ("[1]", 0.0)
     "binary:hinge" => {
       // XGBoost's intercept: one Newton step from a zero margin, where
       // every row has gradient 1 - 2y and hessian 1, put through the
@@ -2529,6 +2537,7 @@ fn train_json(
     "reg:absoluteerror" | "reg:quantileerror" => 8
     "rank:ndcg" | "rank:pairwise" => 9
     "binary:hinge" => 10
+    "survival:cox" => 11
     _ => 2
   }
   let is_cat = FixedArray::make(data.cols, false)
@@ -2709,6 +2718,8 @@ fn train_json(
         }
       }
       out
+    } else if kind == 11 {
+      cox_gradients(label, margin, cox_rows)
     } else if kind == 9 {
       rank_gradients(
         label,

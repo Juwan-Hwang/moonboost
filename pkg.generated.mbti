@@ -135,6 +135,9 @@ pub(all) struct TrainParams {
   quantile_alpha : Double
   group : Array[Int32]
   rank_truncation : Int32
+  label_upper_bound : Array[Float]
+  aft_loss_distribution : String
+  aft_loss_distribution_scale : Double
 }
 pub fn TrainParams::default() -> Self
 pub fn TrainParams::from_json(StringView, base? : Self) -> Self raise ModelError

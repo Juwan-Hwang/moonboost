@@ -28,7 +28,7 @@ trust because it is tested against XGBoost itself.
 | Feature | Status |
 |---|---|
 | XGBoost JSON models (`gbtree`) | done |
-| Objectives: `reg:*` (including `reg:absoluteerror` and `reg:quantileerror`), `binary:logistic`, `binary:logitraw`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `multi:softprob`, `multi:softmax`, `rank:ndcg`, `rank:pairwise` | done |
+| Objectives: `reg:*` (including `reg:absoluteerror` and `reg:quantileerror`), `binary:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `multi:softprob`, `multi:softmax`, `rank:ndcg`, `rank:pairwise` | done |
 | Missing values (NaN, absent features) | done |
 | Categorical splits | done |
 | Leaf indices (`pred_leaf`) | done |
@@ -42,7 +42,7 @@ trust because it is tested against XGBoost itself.
 | ES module for browsers and Node (`web/`) | done |
 | Browser demo (`docs/`, GitHub Pages) | done |
 | XGBoost UBJSON models (`.ubj`) | done |
-| Training: histogram trees for `reg:squarederror`, `reg:pseudohubererror`, `reg:squaredlogerror`, `binary:logistic`, `reg:logistic`, `binary:logitraw`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `multi:softprob`, `multi:softmax`, written as XGBoost JSON | done |
+| Training: histogram trees for `reg:squarederror`, `reg:pseudohubererror`, `reg:squaredlogerror`, `binary:logistic`, `reg:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `multi:softprob`, `multi:softmax`, written as XGBoost JSON | done |
 | Training: row and feature sampling (`subsample` with `uniform` or `gradient_based` rows, `colsample_bytree`, `colsample_bynode`), `min_data_in_leaf` | done |
 | Training: categorical features (one category against the rest, or a set of categories) | done |
 | Training: loss-guided growth (`grow_policy: "lossguide"`, `max_leaves`) | done |
@@ -186,6 +186,16 @@ XGBoost's with the same settings:
 | `reg:squaredlogerror` (RMSLE) | 0.18395 | 0.18536 |
 | `reg:logistic` (log loss) | 0.62110 | 0.62099 |
 | `binary:logitraw` (log loss) | 0.64138 | 0.64120 |
+
+`binary:hinge` predicts class 0 or 1 from the margin's sign. On the
+GBM-perf airline data (800,000 rows to train, the remaining 200,000 to
+test), one thread, 100 rounds, eta 0.1, XGBoost predicts the same bits on
+the moonboost model:
+
+| Depth | moonboost time | accuracy | XGBoost 3.4.1 time | accuracy |
+|---|---|---|---|---|
+| 6 | 2.2 s | 0.8144 | 4.7 s | 0.8145 |
+| 10 | 3.2 s | 0.8237 | 6.7 s | 0.8229 |
 
 `reg:absoluteerror` and `reg:quantileerror` (`quantile_alpha`) grow each
 tree on the loss's gradients and then set every leaf to eta times the

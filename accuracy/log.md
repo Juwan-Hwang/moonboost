@@ -82,3 +82,7 @@
 - 11-22 MSLR 全量（同会话）：mb 38.4 s/.5051，XGB 59.4/.5042，LGB 42.0/.5042；全对 52.3→46.0 s；pairwise 39.3 s 不变。参数 JSON 模型（binary/lossguide+subsample/quantile）XGBoost 加载预测逐位一致。
 - 否决：量化直方图改 Int32（当前量化级 2^31/n，每行值约 12 位，节点和放不进 32 位打包）。
 - 11-22 否决：binary:logistic 梯度单独成环（airline 255 叶 100 轮 5.32→5.27 s，噪声内）。部分热点：airline 255 叶 histogram 37%、partition 23%、gradients 11%、partition_copy 9%。
+- 11-22 CLI 修正：--params 会覆盖其前面的选项（如 --group），改为在已有参数上叠加；TrainParams::from_json 加 base 参数（45e2869）。rank:ndcg/rank:pairwise 三组参数模型（63 叶 lossguide+subsample+lambda、depth6+colsample、全对 depth8+gamma）XGBoost 加载预测逐位一致。
+- 11-22 否决：8 特征直方图两份交替累加（GBM-perf 100 轮 3.92→4.06 s，+3%，链式依赖不是瓶颈）。
+- 11-22 否决：compact_at 改 1/3/4（MSLR 30 轮 14.1–14.4 s → 14.6–15.9 s，2 最优）。
+- 11-22 否决：复制层加列存字节副本供分区读（逐行写 +25%；按列第二遍写入后 rank +1.5%、airline 255 叶 +21%）。perf：MSLR 直方图 41%，热点为行字载入的缓存缺失与直方图 RMW，偏访存受限。

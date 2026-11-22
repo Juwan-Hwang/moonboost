@@ -231,8 +231,8 @@ computes it:
 
 Over three more data seeds at depth 4, the extreme distribution's loss
 is 0.012 to 0.022 below XGBoost's, the normal's between 0.006 below and
-0.003 above, and the logistic's 0.0004 to 0.007 above: there the better
-start does not help.
+0.003 above, and the logistic's between 0.0004 below and 0.007 above:
+there the better start does not help.
 
 `reg:absoluteerror` and `reg:quantileerror` (`quantile_alpha`) grow each
 tree on the loss's gradients and then set every leaf to eta times the

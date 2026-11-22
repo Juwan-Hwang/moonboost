@@ -75,6 +75,20 @@ fn setting_ints(key : String, v : Json) -> Array[Int32] raise ModelError {
 }
 
 ///|
+/// A list of numbers, where `null`, `"inf"` or `"Infinity"` is +inf.
+fn setting_floats(key : String, v : Json) -> Array[Float] raise ModelError {
+  guard v is Array(a) else {
+    raise InvalidModel("`\{key}` should be an array of numbers")
+  }
+  a.map(x => {
+    match x {
+      Null | String("inf" | "Infinity" | "+inf") => Float::from_double(aft_inf)
+      _ => Float::from_double(setting_number(key, x))
+    }
+  })
+}
+
+///|
 fn TrainParams::with_setting(
   self : TrainParams,
   key : String,
@@ -113,6 +127,11 @@ fn TrainParams::with_setting(
     "group" => { ..p, group: setting_ints(key, v), }
     "rank_truncation" | "lambdarank_num_pair_per_sample" =>
       { ..p, rank_truncation: setting_int(key, v), }
+    "label_upper_bound" => { ..p, label_upper_bound: setting_floats(key, v), }
+    "aft_loss_distribution" =>
+      { ..p, aft_loss_distribution: setting_string(key, v), }
+    "aft_loss_distribution_scale" =>
+      { ..p, aft_loss_distribution_scale: setting_number(key, v), }
     _ => raise Unsupported("training parameter `\{key}`")
   }
 }

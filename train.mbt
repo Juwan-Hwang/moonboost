@@ -72,6 +72,14 @@ pub(all) struct TrainParams {
   /// this many of its query by the current scores (0: all pairs; 30, as
   /// LightGBM's lambdarank_truncation_level)
   rank_truncation : Int32
+  /// for `survival:aft`: the upper bound of each row's time, `label` being
+  /// the lower (equal for an observed time, +inf right censored; a lower
+  /// bound of 0 is left censored)
+  label_upper_bound : Array[Float]
+  /// for `survival:aft`: `normal`, `logistic` or `extreme`
+  aft_loss_distribution : String
+  /// for `survival:aft`: the scale of the noise on log time
+  aft_loss_distribution_scale : Double
 }
 
 ///|
@@ -107,6 +115,9 @@ pub fn TrainParams::default() -> TrainParams {
     quantile_alpha: 0.5,
     group: [],
     rank_truncation: 30,
+    label_upper_bound: [],
+    aft_loss_distribution: "normal",
+    aft_loss_distribution_scale: 1.0,
   }
 }
 
@@ -2144,8 +2155,8 @@ fn Grower::gradients(
         let h = (ly - lp + 1.0) / ((pm + 1.0) * (pm + 1.0))
         ((lp - ly) / (pm + 1.0), if h < 1.0e-6 { 1.0e-6 } else { h })
       }
-      // rank:ndcg, rank:pairwise, rank:map and survival:cox, computed beforehand
-      9 | 11 => (probs[r * 2], probs[r * 2 + 1])
+      // rank:ndcg, rank:pairwise, rank:map and survival:cox and :aft, computed beforehand
+      9 | 11 | 12 => (probs[r * 2], probs[r * 2 + 1])
       // binary:hinge on labels -1 and 1: a margin short of 1 on the right
       // side pulls with weight 1, otherwise XGBoost's smallest float
       // hessian and no gradient
@@ -2352,6 +2363,7 @@ fn train_json(
     | "binary:logitraw"
     | "binary:hinge"
     | "survival:cox"
+    | "survival:aft"
     | "count:poisson"
     | "reg:gamma"
     | "reg:tweedie"
@@ -2451,6 +2463,17 @@ fn train_json(
   } else {
     FixedArray::make(0, 0)
   }
+  let (aft, aft_dist) = if p.objective == "survival:aft" {
+    if !(p.aft_loss_distribution_scale > 0.0) {
+      raise InvalidModel("aft_loss_distribution_scale must be positive")
+    }
+    (
+      aft_rows(label, p.label_upper_bound),
+      aft_distribution(p.aft_loss_distribution),
+    )
+  } else {
+    (aft_rows(label[0:0], []), 0)
+  }
   let cox_rows = if p.objective == "survival:cox" {
     cox_order(label)
   } else {
@@ -2499,6 +2522,15 @@ fn train_json(
     }
     // the partial likelihood ignores a common shift: a hazard ratio of 1
     "survival:cox" => ("[1]", 0.0)
+    "survival:aft" => {
+      // the best constant: Newton steps on the likelihood from the mean
+      // log time, stored as a time and used as its log (XGBoost itself
+      // starts every model at a time of 0.5)
+      let b = Float::from_double(
+        train_exp(aft_intercept(aft, aft_dist, p.aft_loss_distribution_scale)),
+      )
+      ("[" + xgb_float_text(b) + "]", @math.ln(b.to_double()))
+    }
     "binary:hinge" => {
       // XGBoost's intercept: one Newton step from a zero margin, where
       // every row has gradient 1 - 2y and hessian 1, put through the
@@ -2545,6 +2577,7 @@ fn train_json(
     "rank:ndcg" | "rank:pairwise" | "rank:map" => 9
     "binary:hinge" => 10
     "survival:cox" => 11
+    "survival:aft" => 12
     _ => 2
   }
   let is_cat = FixedArray::make(data.cols, false)
@@ -2727,6 +2760,8 @@ fn train_json(
       out
     } else if kind == 11 {
       cox_gradients(label, margin, cox_rows)
+    } else if kind == 12 {
+      aft_gradients(aft, margin, aft_dist, p.aft_loss_distribution_scale)
     } else if kind == 9 {
       rank_gradients(
         label,
@@ -2888,6 +2923,8 @@ fn train_json(
       "reg:squaredlogerror" | "reg:absoluteerror" => ""
       "rank:ndcg" | "rank:pairwise" | "rank:map" =>
         ",\"lambdarank_param\":{\"lambdarank_bias_norm\":\"1\",\"lambdarank_normalization\":\"1\",\"lambdarank_num_pair_per_sample\":\"4294967295\",\"lambdarank_pair_method\":\"topk\",\"lambdarank_score_normalization\":\"1\",\"lambdarank_unbiased\":\"0\",\"ndcg_exp_gain\":\"1\"}"
+      "survival:aft" =>
+        ",\"aft_loss_param\":{\"aft_loss_distribution\":\"\{p.aft_loss_distribution}\",\"aft_loss_distribution_scale\":\"\{Float::from_double(p.aft_loss_distribution_scale)}\"}"
       "reg:quantileerror" =>
         ",\"quantile_loss_param\":{\"quantile_alpha\":\"[\{p.quantile_alpha}]\"}"
       _ => ",\"reg_loss_param\":{\"scale_pos_weight\":\"1\"}"

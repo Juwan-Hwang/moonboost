@@ -22,6 +22,9 @@ const USAGE : String =
   #|    | reg:pseudohubererror | reg:squaredlogerror | reg:absoluteerror
   #|    | reg:quantileerror | rank:ndcg | rank:pairwise | rank:map | binary:hinge
   #|    | survival:cox (labels: event times, negative when censored)
+  #|    | survival:aft (labels: lower bounds of the times)
+  #|  --label-upper-bound upper.txt  (survival:aft: one per line, inf allowed)
+  #|  --aft-distribution normal|logistic|extreme  --aft-scale 1
   #|  --group sizes.txt  (rank: one query size per line, rows in order)
   #|  --rank-truncation 30  (rank: pair only within the top N, 0 all)
   #|  --tweedie-variance-power 1.5  --huber-slope 1  --quantile-alpha 0.5
@@ -332,6 +335,24 @@ fn train(args : ArrayView[String]) -> Unit raise {
       }
       "--rank-truncation" =>
         p = { ..p, rank_truncation: @string.parse_int(next()), }
+      "--label-upper-bound" => {
+        let ub : Array[Float] = []
+        for line in @fs.read_file_to_string(next()).split("\n") {
+          let t = line.trim()
+          if t.length() > 0 {
+            ub.push(
+              if t == "inf" || t == "Infinity" || t == "+inf" {
+                Float::from_double(0x7FF0000000000000L.reinterpret_as_double())
+              } else {
+                Float::from_double(@string.parse_double(t))
+              },
+            )
+          }
+        }
+        p = { ..p, label_upper_bound: ub, }
+      }
+      "--aft-distribution" => p = { ..p, aft_loss_distribution: next(), }
+      "--aft-scale" => p = { ..p, aft_loss_distribution_scale: num(), }
       "--group" => {
         let sizes = []
         for line in @fs.read_file_to_string(next()).split("\n") {

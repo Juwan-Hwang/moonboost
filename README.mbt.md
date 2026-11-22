@@ -28,7 +28,7 @@ trust because it is tested against XGBoost itself.
 | Feature | Status |
 |---|---|
 | XGBoost JSON models (`gbtree`) | done |
-| Objectives: `reg:*` (including `reg:absoluteerror` and `reg:quantileerror`), `binary:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `survival:cox`, `multi:softprob`, `multi:softmax`, `rank:ndcg`, `rank:pairwise`, `rank:map` | done |
+| Objectives: `reg:*` (including `reg:absoluteerror` and `reg:quantileerror`), `binary:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `survival:cox`, `survival:aft`, `multi:softprob`, `multi:softmax`, `rank:ndcg`, `rank:pairwise`, `rank:map` | done |
 | Missing values (NaN, absent features) | done |
 | Categorical splits | done |
 | Leaf indices (`pred_leaf`) | done |
@@ -42,7 +42,7 @@ trust because it is tested against XGBoost itself.
 | ES module for browsers and Node (`web/`) | done |
 | Browser demo (`docs/`, GitHub Pages) | done |
 | XGBoost UBJSON models (`.ubj`) | done |
-| Training: histogram trees for `reg:squarederror`, `reg:pseudohubererror`, `reg:squaredlogerror`, `binary:logistic`, `reg:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `survival:cox`, `multi:softprob`, `multi:softmax`, written as XGBoost JSON | done |
+| Training: histogram trees for `reg:squarederror`, `reg:pseudohubererror`, `reg:squaredlogerror`, `binary:logistic`, `reg:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `survival:cox`, `survival:aft`, `multi:softprob`, `multi:softmax`, written as XGBoost JSON | done |
 | Training: row and feature sampling (`subsample` with `uniform` or `gradient_based` rows, `colsample_bytree`, `colsample_bynode`), `min_data_in_leaf` | done |
 | Training: categorical features (one category against the rest, or a set of categories) | done |
 | Training: loss-guided growth (`grow_policy: "lossguide"`, `max_leaves`) | done |
@@ -207,6 +207,32 @@ the same bits on the moonboost model; concordance on held-out rows:
 |---|---|---|---|---|
 | 4 | 1.3 s | 0.7515 | 1.8 s | 0.7518 |
 | 6 | 1.6 s | 0.7565 | 2.5 s | 0.7559 |
+
+`survival:aft` is the accelerated failure time model on interval
+censored times: `label` is each time's lower bound and
+`label_upper_bound` its upper (equal when observed, +inf when right
+censored, a lower bound of 0 when left censored), with XGBoost's normal,
+logistic and extreme distributions, gradients, clipping and limits.
+Instead of XGBoost's fixed starting time of 0.5, the model starts at the
+constant of highest likelihood. On 250,000 synthetic rows (50% observed,
+25% right, 10% left and 15% interval censored; 200,000 to train), one
+thread, 200 rounds, eta 0.05 (`bench/train_aft.py`), XGBoost predicts the
+same bits on the moonboost model; held-out `aft-nloglik` as XGBoost
+computes it:
+
+| Distribution, scale | Depth | moonboost time | nloglik | XGBoost 3.4.1 time | nloglik |
+|---|---|---|---|---|---|
+| normal, 1 | 4 | 1.9 s | 1.4141 | 4.5 s | 1.4175 |
+| normal, 1 | 6 | 2.1 s | 1.3956 | 4.9 s | 1.3955 |
+| logistic, 0.5 | 4 | 2.2 s | 1.5643 | 3.5 s | 1.5595 |
+| logistic, 0.5 | 6 | 2.5 s | 1.5553 | 4.0 s | 1.5549 |
+| extreme, 0.8 | 4 | 3.1 s | 1.4620 | 4.4 s | 1.4735 |
+| extreme, 0.8 | 6 | 3.3 s | 1.4571 | 5.0 s | 1.4572 |
+
+Over three more data seeds at depth 4, the extreme distribution's loss
+is 0.012 to 0.022 below XGBoost's, the normal's between 0.006 below and
+0.003 above, and the logistic's 0.0004 to 0.007 above: there the better
+start does not help.
 
 `reg:absoluteerror` and `reg:quantileerror` (`quantile_alpha`) grow each
 tree on the loss's gradients and then set every leaf to eta times the

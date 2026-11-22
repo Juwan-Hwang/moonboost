@@ -34,7 +34,11 @@ pub fn Objective::from_name(
     | "rank:ndcg"
     | "rank:map" => Identity(name)
     "binary:logistic" | "reg:logistic" => Logistic(name)
-    "count:poisson" | "reg:gamma" | "reg:tweedie" | "survival:cox" => Exp(name)
+    "count:poisson"
+    | "reg:gamma"
+    | "reg:tweedie"
+    | "survival:cox"
+    | "survival:aft" => Exp(name)
     "binary:hinge" => Hinge
     "multi:softprob" => Softprob(num_class)
     "multi:softmax" => Softmax(num_class)

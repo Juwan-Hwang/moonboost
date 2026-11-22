@@ -604,6 +604,63 @@ test "rank:map orders the relevant documents of each query first" {
 }
 
 ///|
+test "survival:aft fits log times under censoring" {
+  let (x, y) = toy(2000)
+  // times e^(y / 2); every third row right censored at half its time
+  let lower : Array[Float] = []
+  let upper : Array[Float] = []
+  let inf = Float::from_double(0x7FF0000000000000L.reinterpret_as_double())
+  for i, v in y {
+    let t = Float::from_double(@math.exp(v.to_double() / 2.0))
+    if i % 3 == 0 {
+      lower.push(t * 0.5)
+      upper.push(inf)
+    } else {
+      lower.push(t)
+      upper.push(t)
+    }
+  }
+  for dist in ["normal", "logistic", "extreme"] {
+    let json = @moonboost.train_xgboost_json(x, lower, params={
+      ..@moonboost.TrainParams::default(),
+      objective: "survival:aft",
+      label_upper_bound: upper,
+      aft_loss_distribution: dist,
+      num_round: 40,
+      max_depth: 4,
+      eta: 0.3,
+    })
+    let m = @moonboost.Model::from_xgboost_json(json)
+    let pred = m.predict_batch(x)
+    // log predicted times track the observed ones
+    let mut err = 0.0
+    let mut cnt = 0
+    for i in 0..<2000 {
+      if i % 3 != 0 {
+        let d = @math.ln(pred[i].to_double()) - y[i].to_double() / 2.0
+        err += d * d
+        cnt += 1
+      }
+    }
+    assert_true(
+      err / cnt.to_double() < 0.1,
+      msg="\{dist}: \{err / cnt.to_double()}",
+    )
+  }
+  let p = @moonboost.TrainParams::from_json(
+    "{\"objective\": \"survival:aft\", \"label_upper_bound\": [1, null], \"aft_loss_distribution\": \"logistic\"}",
+  )
+  assert_true(p.label_upper_bound[1].to_double() > 1.0e300)
+  let bad = @moonboost.train_xgboost_json(x, lower, params={
+    ..@moonboost.TrainParams::default(),
+    objective: "survival:aft",
+  }) catch {
+    _ => "error"
+  }
+  assert_eq(bad, "error")
+}
+
+///|
 test "survival:cox ranks shorter times as higher hazard" {
   let rows = 300
   let data = Array::makei(rows, r => Float::from_int(r % 30))

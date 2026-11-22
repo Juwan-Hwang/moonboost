@@ -147,6 +147,9 @@ fn sorted_column(m : DenseMatrix, f : Int32) -> FixedArray[Float] {
   }
   let mut keys : FixedArray[Int32] = FixedArray::make(n, 0)
   let mut tmp : FixedArray[Int32] = FixedArray::make(n, 0)
+  // the byte counts of all four passes in one read of the keys: the
+  // passes only permute the keys, so the counts hold for each of them
+  let count = FixedArray::make(1024, 0)
   let mut k = 0
   for r in 0..<rows {
     let v = m.data[r * cols + f]
@@ -154,30 +157,34 @@ fn sorted_column(m : DenseMatrix, f : Int32) -> FixedArray[Float] {
       let b = v.reinterpret_as_int()
       // flip negatives so signed integer order matches float order, then
       // move the sign so unsigned byte order does too
-      keys[k] = b ^ ((b >> 31) & 0x7FFFFFFF) ^ 0x80000000
+      let key = b ^ ((b >> 31) & 0x7FFFFFFF) ^ 0x80000000
+      keys[k] = key
+      let d0 = key & 255
+      let d1 = ((key >> 8) & 255) + 256
+      let d2 = ((key >> 16) & 255) + 512
+      let d3 = ((key >> 24) & 255) + 768
+      count.unsafe_set(d0, count.unsafe_get(d0) + 1)
+      count.unsafe_set(d1, count.unsafe_get(d1) + 1)
+      count.unsafe_set(d2, count.unsafe_get(d2) + 1)
+      count.unsafe_set(d3, count.unsafe_get(d3) + 1)
       k += 1
     }
   }
-  let count = FixedArray::make(256, 0)
   for pass in 0..<4 {
     let shift = pass * 8
-    count.fill(0)
-    for i in 0..<n {
-      let d = (keys.unsafe_get(i) >> shift) & 255
-      count.unsafe_set(d, count.unsafe_get(d) + 1)
-    }
-    if n == 0 || count[(keys[0] >> shift) & 255] == n {
+    let o = pass * 256
+    if n == 0 || count[o + ((keys[0] >> shift) & 255)] == n {
       continue
     }
     let mut sum = 0
-    for d in 0..<256 {
+    for d in o..<(o + 256) {
       let c = count[d]
       count[d] = sum
       sum += c
     }
     for i in 0..<n {
       let key = keys.unsafe_get(i)
-      let d = (key >> shift) & 255
+      let d = ((key >> shift) & 255) + o
       let at = count.unsafe_get(d)
       tmp.unsafe_set(at, key)
       count.unsafe_set(d, at + 1)
@@ -394,6 +401,46 @@ fn copy_strip(
   w : Int32,
   bufs : FixedArray[FixedArray[Float]],
 ) -> Unit {
+  if w == 16 {
+    // the sixteen buffers in locals: the stores could alias the array of
+    // buffers for the C compiler, which would reload it for every value
+    let c0 = bufs[0]
+    let c1 = bufs[1]
+    let c2 = bufs[2]
+    let c3 = bufs[3]
+    let c4 = bufs[4]
+    let c5 = bufs[5]
+    let c6 = bufs[6]
+    let c7 = bufs[7]
+    let c8 = bufs[8]
+    let c9 = bufs[9]
+    let c10 = bufs[10]
+    let c11 = bufs[11]
+    let c12 = bufs[12]
+    let c13 = bufs[13]
+    let c14 = bufs[14]
+    let c15 = bufs[15]
+    for r in 0..<rows {
+      let at = r * cols + f
+      c0.unsafe_set(r, data.unsafe_get(at))
+      c1.unsafe_set(r, data.unsafe_get(at + 1))
+      c2.unsafe_set(r, data.unsafe_get(at + 2))
+      c3.unsafe_set(r, data.unsafe_get(at + 3))
+      c4.unsafe_set(r, data.unsafe_get(at + 4))
+      c5.unsafe_set(r, data.unsafe_get(at + 5))
+      c6.unsafe_set(r, data.unsafe_get(at + 6))
+      c7.unsafe_set(r, data.unsafe_get(at + 7))
+      c8.unsafe_set(r, data.unsafe_get(at + 8))
+      c9.unsafe_set(r, data.unsafe_get(at + 9))
+      c10.unsafe_set(r, data.unsafe_get(at + 10))
+      c11.unsafe_set(r, data.unsafe_get(at + 11))
+      c12.unsafe_set(r, data.unsafe_get(at + 12))
+      c13.unsafe_set(r, data.unsafe_get(at + 13))
+      c14.unsafe_set(r, data.unsafe_get(at + 14))
+      c15.unsafe_set(r, data.unsafe_get(at + 15))
+    }
+    return
+  }
   for r in 0..<rows {
     let at = r * cols + f
     for j in 0..<w {

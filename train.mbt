@@ -20,6 +20,11 @@ pub(all) struct TrainParams {
   /// row by row (XGBoost's two-dimensional label), and each round grows
   /// one tree per output
   num_target : Int32
+  /// with several outputs, `"one_output_per_tree"` (each round grows one
+  /// tree per output) or `"multi_output_tree"` (one tree whose leaves hold
+  /// a value per output; squared, pseudo-Huber and logistic losses,
+  /// depth-wise growth on numerical features without sampling)
+  multi_strategy : String
   num_round : Int32
   max_depth : Int32
   /// learning rate
@@ -100,6 +105,7 @@ pub fn TrainParams::default() -> TrainParams {
     objective: "reg:squarederror",
     num_class: 0,
     num_target: 1,
+    multi_strategy: "one_output_per_tree",
     num_round: 10,
     max_depth: 6,
     eta: 0.3,
@@ -2519,6 +2525,12 @@ fn train_json(
       o => raise Unsupported("num_target above 1 with \{o}")
     }
   }
+  if p.multi_strategy != "one_output_per_tree" &&
+    p.multi_strategy != "multi_output_tree" {
+    raise InvalidModel(
+      "multi_strategy must be one_output_per_tree or multi_output_tree",
+    )
+  }
   if label.length() != n * nt {
     raise InvalidModel("\{label.length()} labels for \{n} rows")
   }
@@ -2841,6 +2853,44 @@ fn train_json(
     hist_start[f + 1] = hist_start[f] +
       (binned.cut_start[f + 1] - binned.cut_start[f] + 2)
   }
+  if p.multi_strategy == "multi_output_tree" && nt > 1 {
+    match p.objective {
+      "reg:squarederror"
+      | "reg:pseudohubererror"
+      | "binary:logistic"
+      | "reg:logistic"
+      | "binary:logitraw" => ()
+      o => raise Unsupported("multi_output_tree with \{o}")
+    }
+    if ncat > 0 ||
+      p.grow_policy != "depthwise" ||
+      p.subsample < 1.0 ||
+      p.colsample_bytree < 1.0 ||
+      p.colsample_bynode < 1.0 ||
+      p.min_data_in_leaf > 0.0 {
+      raise Unsupported(
+        "multi_output_tree takes depth-wise growth on numerical features without sampling",
+      )
+    }
+    let margin = FixedArray::make(n * nt, (0.0 : Float))
+    for r in 0..<n {
+      for k in 0..<nt {
+        margin[r * nt + k] = Float::from_double(group_margins[k])
+      }
+    }
+    let trees = StringBuilder()
+    train_multi_trees(binned, hist_start, n, label, margin, p, kind, trees)
+    return model_json(
+      trees.to_string(),
+      p.num_round,
+      1,
+      nt,
+      false,
+      base_text,
+      data.cols,
+      p,
+    )
+  }
   // per-feature base of the one-byte copied bins: a feature without
   // missing values never uses its missing slot
   let cbase = FixedArray::makei(data.cols, fn(f) {
@@ -3125,6 +3175,31 @@ fn train_json(
       num_trees += 1
     }
   }
+  model_json(
+    trees.to_string(),
+    num_trees,
+    groups,
+    groups,
+    softmax,
+    base_text,
+    data.cols,
+    p,
+  )
+}
+
+///|
+/// The XGBoost JSON document around the trees' JSON: `per_round` trees a
+/// round, tree i for output i % per_round.
+fn model_json(
+  trees : String,
+  num_trees : Int32,
+  per_round : Int32,
+  groups : Int32,
+  softmax : Bool,
+  base_text : String,
+  num_feature : Int32,
+  p : TrainParams,
+) -> String {
   let buf = StringBuilder()
   buf.write_string(
     "{\"learner\":{\"attributes\":{},\"feature_names\":[],\"feature_types\":[],\"gradient_booster\":{\"model\":{\"cats\":{\"enc\":[],\"feature_segments\":[],\"sorted_idx\":[]},",
@@ -3132,16 +3207,16 @@ fn train_json(
   buf.write_string(
     "\"gbtree_model_param\":{\"num_parallel_tree\":\"1\",\"num_trees\":\"\{num_trees}\"},\"iteration_indptr\":",
   )
-  json_ints(buf, Array::makei(p.num_round + 1, i => i * groups))
+  json_ints(buf, Array::makei(p.num_round + 1, i => i * per_round))
   buf.write_string(",\"tree_info\":")
-  json_ints(buf, Array::makei(num_trees, i => i % groups))
+  json_ints(buf, Array::makei(num_trees, i => i % per_round))
   buf.write_string(",\"trees\":[")
-  buf.write_string(trees.to_string())
+  buf.write_string(trees)
   buf.write_string("]},\"name\":\"gbtree\"},\"learner_model_param\":{")
   let num_class = if softmax { groups } else { 0 }
   let num_target = if softmax { 1 } else { groups }
   buf.write_string(
-    "\"base_score\":\"\{base_text}\",\"boost_from_average\":\"1\",\"num_class\":\"\{num_class}\",\"num_feature\":\"\{data.cols}\",\"num_target\":\"\{num_target}\"},",
+    "\"base_score\":\"\{base_text}\",\"boost_from_average\":\"1\",\"num_class\":\"\{num_class}\",\"num_feature\":\"\{num_feature}\",\"num_target\":\"\{num_target}\"},",
   )
   if softmax {
     buf.write_string(

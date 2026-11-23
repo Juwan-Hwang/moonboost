@@ -22,10 +22,33 @@ fn parse_base_score(s : String) -> Array[Float] raise ModelError {
 }
 
 ///|
+/// Values per leaf: `tree_param.size_leaf_vector`, 1 when absent or 0.
+fn leaf_vector_size(t : Src) -> Int32 raise ModelError {
+  if !t.has("tree_param") {
+    return 1
+  }
+  let tp = t.field("tree_param")
+  if !tp.has("size_leaf_vector") {
+    return 1
+  }
+  let k = param_int(tp, "size_leaf_vector")
+  if k < 1 {
+    1
+  } else {
+    k
+  }
+}
+
+///|
 /// Parse one tree. `weight` scales its leaves (DART's tree weights): XGBoost
 /// adds `leaf * weight` rounded to float32, so the scaled leaf is exactly the
 /// term it adds.
-fn parse_tree(t : Src, weight : Float) -> Tree raise ModelError {
+fn parse_tree(
+  t : Src,
+  weight : Float,
+  output~ : Int32 = 0,
+  outputs~ : Int32 = 1,
+) -> Tree raise ModelError {
   let left = t.field("left_children").ints("left_children")
   let split_type = t.field("split_type").ints("split_type")
   let categories : Array[Array[Int32]?] = Array::make(left.length(), None)
@@ -51,13 +74,36 @@ fn parse_tree(t : Src, weight : Float) -> Tree raise ModelError {
       }
     }
   }
-  let value = t.field("split_conditions").floats("split_conditions")
+  let cond = t.field("split_conditions").floats("split_conditions")
+  let value = if outputs > 1 {
+    // a leaf's values are its base_weights, k per node
+    let bw = t.field("base_weights").floats("base_weights")
+    if bw.length() != left.length() * outputs {
+      raise InvalidModel("tree arrays have inconsistent lengths")
+    }
+    Array::makei(left.length(), i => {
+      if left[i] == -1 {
+        bw[i * outputs + output]
+      } else {
+        cond[i]
+      }
+    })
+  } else {
+    cond
+  }
   if value.length() != left.length() {
     raise InvalidModel("tree arrays have inconsistent lengths")
   }
+  // a vector-leaf tree numbers its leaves in right_children
+  let right = t.field("right_children").ints("right_children")
+  let right = if outputs > 1 {
+    Array::makei(left.length(), i => if left[i] == -1 { -1 } else { right[i] })
+  } else {
+    right
+  }
   Tree::new(
     left~,
-    right=t.field("right_children").ints("right_children"),
+    right~,
     feature=t.field("split_indices").ints("split_indices"),
     value=if weight == 1.0 {
       value
@@ -158,10 +204,27 @@ fn model_from_src(root : Src) -> Model raise ModelError {
       "\{weights.length()} tree weights for \{items.length()} trees",
     )
   }
-  let trees = items.mapi((i, t) => {
-    parse_tree(t, if i < weights.length() { weights[i] } else { 1.0 })
-  })
-  let tree_group = model.field("tree_info").ints("tree_info")
+  let info = model.field("tree_info").ints("tree_info")
+  let trees = []
+  let tree_group = []
+  for i, t in items {
+    let w = if i < weights.length() { weights[i] } else { 1.0 }
+    let k = leaf_vector_size(t)
+    if k == 1 {
+      trees.push(parse_tree(t, w))
+      tree_group.push(if i < info.length() { info[i] } else { 0 })
+    } else {
+      // a vector-leaf tree adds its leaf's j-th value to output j: as one
+      // tree per output sharing its splits
+      if k != num_group {
+        raise InvalidModel("leaf vectors of \{k} for \{num_group} outputs")
+      }
+      for j in 0..<k {
+        trees.push(parse_tree(t, w, output=j, outputs=k))
+        tree_group.push(j)
+      }
+    }
+  }
   if base_score.length() != 1 && base_score.length() != num_group {
     raise InvalidModel(
       "\{base_score.length()} base scores for \{num_group} groups",

@@ -29,6 +29,9 @@ const USAGE : String =
   #|  --rank-truncation 30  (rank: pair only within the top N, 0 all)
   #|  --tweedie-variance-power 1.5  --huber-slope 1  --quantile-alpha 0.5
   #|  --quantile-alpha 0.1,0.5,0.9  (several quantiles: one output each)
+  #|  --multi-strategy one_output_per_tree | multi_output_tree
+  #|    (with a multi-column labels file: one tree per output, or one tree
+  #|    with a value per output in each leaf)
   #|  --num-class K  --rounds 10  --depth 6  --eta 0.3  --lambda 1
   #|  --gamma 0  --min-child-weight 1  --max-bin 256  --header
   #|  --categorical 0,3,4  (columns of category codes)
@@ -303,6 +306,7 @@ fn train(args : ArrayView[String]) -> Unit raise {
       "--min-child-weight" => p = { ..p, min_child_weight: num(), }
       "--max-bin" => p = { ..p, max_bin: @string.parse_int(next()), }
       "--grow-policy" => p = { ..p, grow_policy: next(), }
+      "--multi-strategy" => p = { ..p, multi_strategy: next(), }
       "--max-leaves" => p = { ..p, max_leaves: @string.parse_int(next()), }
       "--categorical" => {
         let cols = []

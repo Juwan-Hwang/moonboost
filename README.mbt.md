@@ -302,6 +302,29 @@ Against XGBoost the per-output, per-seed losses differ by at most about
 three standard errors, either way (lower in 10 of 18); moonboost's is
 lower than LightGBM's in 13 of 18.
 
+`multi_strategy: "multi_output_tree"` (`--multi-strategy` on the command
+line) grows one tree a round instead, whose splits serve every output and
+whose leaves hold one value per output (squared, pseudo-Huber and
+logistic losses; depth-wise, numerical features, no sampling). A split's
+gain is the sum of each output's gain, from histograms that keep one
+packed integer gradient pair per output in each bin; leaf values come
+from the rows' exact gradients. The trees are XGBoost's vector-leaf trees
+(`size_leaf_vector`), which XGBoost loads and predicts the same bits
+from, and moonboost loads XGBoost's. Same data and settings
+(`bench/train_multitree.py`), against XGBoost's `multi_output_tree`:
+
+| Three outputs, vector leaves | moonboost | XGBoost 3.4.1 `hist` | LightGBM 4.7.0 (3 separate models) |
+|---|---|---|---|
+| `reg:squarederror`, time | 1.37 to 1.42 s | 2.71 to 2.85 s | 3.45 to 3.47 s |
+| held-out RMSE, mean of the three | 0.50557 | 0.50549 | 0.50231 |
+| `binary:logistic`, time | 1.66 to 1.71 s | 3.33 to 3.36 s | 4.09 to 4.16 s |
+| held-out log loss, mean of the three | 0.38825 | 0.38825 | 0.38548 |
+
+moonboost and XGBoost differ per output and seed by at most about three
+standard errors, either way (moonboost lower in 7 of 18). On this data
+vector leaves fit worse than one tree per output, for both libraries:
+LightGBM's three separate models are better on all 18.
+
 ### Ranking
 
 `rank:ndcg` is LambdaRank: within each query (`group`, the query sizes in

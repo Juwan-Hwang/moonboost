@@ -110,6 +110,7 @@ pub(all) struct TrainParams {
   objective : String
   num_class : Int32
   num_target : Int32
+  multi_strategy : String
   num_round : Int32
   max_depth : Int32
   eta : Double

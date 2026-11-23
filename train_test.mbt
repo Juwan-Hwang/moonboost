@@ -467,6 +467,82 @@ test "several outputs match one model per output" {
 }
 
 ///|
+test "vector-leaf trees: one tree a round serving every output" {
+  let (x, y) = toy(1500)
+  let n = y.length()
+  for o in ["reg:squarederror", "reg:pseudohubererror", "binary:logistic"] {
+    let binary = o.has_prefix("binary:")
+    let col = (r : Int32, k : Int32) => {
+      let v = y[r] * Float::from_int(k + 1) + Float::from_int(k)
+      if binary {
+        if v > Float::from_int(k) {
+          (1.0 : Float)
+        } else {
+          0.0
+        }
+      } else {
+        v
+      }
+    }
+    let labels : Array[Float] = Array::makei(n * 2, i => col(i / 2, i % 2))
+    let params = {
+      ..@moonboost.TrainParams::default(),
+      objective: o,
+      num_round: 15,
+      max_depth: 4,
+      num_target: 2,
+      multi_strategy: "multi_output_tree",
+    }
+    let text = @moonboost.train_xgboost_json(x, labels, params~)
+    assert_true(text.contains("\"size_leaf_vector\":\"2\""))
+    assert_true(text.contains("\"num_trees\":\"15\""))
+    let m = @moonboost.Model::from_xgboost_json(text)
+    // each output fits its own labels better than its mean does
+    for k in 0..<2 {
+      let mut mean = 0.0
+      for r in 0..<n {
+        mean += col(r, k).to_double()
+      }
+      mean = mean / n.to_double()
+      let mut err = 0.0
+      let mut base = 0.0
+      for r in 0..<n {
+        let row = x.data[r * x.cols:(r + 1) * x.cols]
+        let d = m.predict(row)[k].to_double() - col(r, k).to_double()
+        let e = mean - col(r, k).to_double()
+        err += d * d
+        base += e * e
+      }
+      // pseudo-Huber's tiny hessians make 15 rounds too few to judge
+      if o != "reg:pseudohubererror" {
+        assert_true(err < base * 0.5, msg="\{o} output \{k}: \{err} vs \{base}")
+      }
+    }
+  }
+  // two outputs with the same labels get the same values
+  let same : Array[Float] = Array::makei(n * 2, i => y[i / 2])
+  let m = @moonboost.Model::train(x, same, params={
+    ..@moonboost.TrainParams::default(),
+    num_round: 5,
+    num_target: 2,
+    multi_strategy: "multi_output_tree",
+  })
+  for r in 0..<n {
+    let p = m.predict(x.data[r * x.cols:(r + 1) * x.cols])
+    assert_eq(p[0], p[1])
+  }
+  let bad = @moonboost.train_xgboost_json(x, same, params={
+    ..@moonboost.TrainParams::default(),
+    num_target: 2,
+    multi_strategy: "multi_output_tree",
+    subsample: 0.5,
+  }) catch {
+    _ => "error"
+  }
+  assert_eq(bad, "error")
+}
+
+///|
 test "labels and settings outside an objective's domain are refused" {
   let (x, y) = toy(100)
   let cases = [

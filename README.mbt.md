@@ -276,6 +276,32 @@ objective, so it trains three models. Mean held-out pinball loss with
 The loss is below XGBoost's for every seed and quantile, and within
 about one standard error of LightGBM's (above it in 9 of 12 cases).
 
+### Several outputs
+
+`num_target: K` trains one model with K outputs for `reg:squarederror`,
+`reg:pseudohubererror`, `reg:absoluteerror`, `binary:logistic`,
+`reg:logistic` and `binary:logitraw`: the label holds K values per row,
+row by row (on the command line, a labels file with K comma-separated
+columns), each output starts from its own labels' intercept, and each
+round grows one tree per output, which is XGBoost's multi-target model
+with its default `one_output_per_tree`. Each output's trees are the ones
+a model trained on that column alone would grow. On 250,000 synthetic
+rows with 10 features (200,000 to train), three targets, three seeds,
+100 rounds, depth 6, one thread (`bench/train_multioutput.py`, data
+loading included), XGBoost predicts the same bits from our models;
+LightGBM trains three models:
+
+| Three outputs | moonboost | XGBoost 3.4.1 `hist` | LightGBM 4.7.0 (3 models) |
+|---|---|---|---|
+| `reg:squarederror`, time | 1.88 to 1.95 s | 3.53 to 3.68 s | 3.08 to 3.13 s |
+| held-out RMSE, mean of the three | 0.50209 | 0.50215 | 0.50231 |
+| `binary:logistic`, time | 2.19 to 2.22 s | 4.12 to 4.30 s | 3.75 to 3.87 s |
+| held-out log loss, mean of the three | 0.38527 | 0.38534 | 0.38548 |
+
+Against XGBoost the per-output, per-seed losses differ by at most about
+three standard errors, either way (lower in 10 of 18); moonboost's is
+lower than LightGBM's in 13 of 18.
+
 ### Ranking
 
 `rank:ndcg` is LambdaRank: within each query (`group`, the query sizes in

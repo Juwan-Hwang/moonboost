@@ -39,7 +39,9 @@ const USAGE : String =
   #|  --min-data-in-leaf 0
   #|  --params params.json  (XGBoost parameter names as a JSON object; later
   #|    options override it)
-  #|labels.csv holds one label per line. The model is written as XGBoost JSON.
+  #|labels.csv holds one label per line, or several comma-separated for a
+  #|model with one output each (reg:squarederror, reg:pseudohubererror,
+  #|reg:absoluteerror, binary:logistic, reg:logistic, binary:logitraw). The model is written as XGBoost JSON.
   #|
   #|Models are XGBoost JSON files (Booster.save_model("model.json")) or
   #|LightGBM text files (Booster.save_model("model.txt")).
@@ -388,7 +390,13 @@ fn train(args : ArrayView[String]) -> Unit raise {
     @fs.read_file_to_bytes(files[1])[:],
     header~,
   )
-  let label = Array::makei(labels.rows, r => labels.row(r)[0])
+  // several label columns: one output each
+  let label = if labels.cols > 1 {
+    p = { ..p, num_target: labels.cols, }
+    Array::makei(labels.rows * labels.cols, i => labels.data[i])
+  } else {
+    Array::makei(labels.rows, r => labels.row(r)[0])
+  }
   let t0 = @env.now()
   let json = @moonboost.train_xgboost_json(data, label, params=p)
   let t1 = @env.now()

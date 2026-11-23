@@ -109,6 +109,7 @@ pub fn Objective::transform(Self, Array[Float]) -> Unit
 pub(all) struct TrainParams {
   objective : String
   num_class : Int32
+  num_target : Int32
   num_round : Int32
   max_depth : Int32
   eta : Double

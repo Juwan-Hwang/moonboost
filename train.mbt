@@ -14,6 +14,12 @@ pub(all) struct TrainParams {
   objective : String
   /// number of classes, for the `multi:` objectives
   num_class : Int32
+  /// outputs per row for `reg:squarederror`, `reg:pseudohubererror`,
+  /// `reg:absoluteerror`, `binary:logistic`, `reg:logistic` and
+  /// `binary:logitraw`: the label then holds num_target values per row,
+  /// row by row (XGBoost's two-dimensional label), and each round grows
+  /// one tree per output
+  num_target : Int32
   num_round : Int32
   max_depth : Int32
   /// learning rate
@@ -93,6 +99,7 @@ pub fn TrainParams::default() -> TrainParams {
   {
     objective: "reg:squarederror",
     num_class: 0,
+    num_target: 1,
     num_round: 10,
     max_depth: 6,
     eta: 0.3,
@@ -2265,6 +2272,35 @@ fn add_leaves(
 }
 
 ///|
+/// The intercept of an output whose labels average `mean`, as XGBoost
+/// stores it and as a margin, for the losses that allow several outputs
+/// and start from the mean.
+fn mean_intercept(objective : String, mean : Double) -> (Float, Double) {
+  let x = if mean < 1.0e-6 {
+    1.0e-6
+  } else if mean > 1.0 - 1.0e-6 {
+    1.0 - 1.0e-6
+  } else {
+    mean
+  }
+  match objective {
+    "binary:logitraw" => {
+      let b = Float::from_double(@math.ln(x / (1.0 - x)))
+      (b, b.to_double())
+    }
+    "binary:logistic" | "reg:logistic" => {
+      let pr = Float::from_double(x)
+      let v = pr.to_double()
+      (pr, @math.ln(v / (1.0 - v)))
+    }
+    _ => {
+      let b = Float::from_double(mean)
+      (b, b.to_double())
+    }
+  }
+}
+
+///|
 /// The quantile output k of the absolute and quantile losses fits.
 fn quantile_alpha_of(p : TrainParams, k : Int32) -> Double {
   if p.objective != "reg:quantileerror" {
@@ -2468,7 +2504,22 @@ fn train_json(
 ) -> String raise ModelError {
   let p = params
   let n = data.rows
-  if label.length() != n {
+  let nt = p.num_target
+  if nt < 1 {
+    raise InvalidModel("num_target must be positive")
+  }
+  if nt > 1 {
+    match p.objective {
+      "reg:squarederror"
+      | "reg:pseudohubererror"
+      | "reg:absoluteerror"
+      | "binary:logistic"
+      | "reg:logistic"
+      | "binary:logitraw" => ()
+      o => raise Unsupported("num_target above 1 with \{o}")
+    }
+  }
+  if label.length() != n * nt {
     raise InvalidModel("\{label.length()} labels for \{n} rows")
   }
   if n == 0 {
@@ -2513,6 +2564,11 @@ fn train_json(
     }
     o => raise Unsupported("training objective \{o}")
   }
+  let groups = if nt > 1 { nt } else { groups }
+  // each output's labels, for a model with several
+  let tcols : Array[Array[Float]] = Array::makei(if nt > 1 { nt } else { 0 }, k => {
+    Array::makei(n, r => label[r * nt + k])
+  })
   let softmax = p.objective == "multi:softprob" ||
     p.objective == "multi:softmax"
   for y in label {
@@ -2629,6 +2685,8 @@ fn train_json(
   } else {
     FixedArray::make(0, 0.0)
   }
+  // the starting margin of each output when they differ
+  let group_margins : Array[Double] = []
   let (base_text, base_margin) = match p.objective {
     "reg:squarederror" | "reg:pseudohubererror" => {
       let b = Float::from_double(mean)
@@ -2637,10 +2695,14 @@ fn train_json(
     "reg:absoluteerror" | "reg:quantileerror" => {
       // one intercept per quantile; base_margins carries them
       let b = Array::makei(groups, k => {
+        let col = if nt > 1 { tcols[k][:] } else { label }
         Float::from_double(
-          quantile(FixedArray::makei(n, i => label[i]), quantile_alpha_of(p, k)),
+          quantile(FixedArray::makei(n, i => col[i]), quantile_alpha_of(p, k)),
         )
       })
+      for v in b {
+        group_margins.push(v.to_double())
+      }
       ("[" + b.map(xgb_float_text).join(",") + "]", b[0].to_double())
     }
     "reg:squaredlogerror" => {
@@ -2701,6 +2763,22 @@ fn train_json(
       ("[" + xgb_float_text(pr) + "]", @math.ln(x / (1.0 - x)))
     }
     _ => ("[" + Array::make(groups, "0").join(",") + "]", 0.0)
+  }
+  // several outputs: each starts from its own labels' intercept
+  let (base_text, base_margin) = if nt > 1 && p.objective != "reg:absoluteerror" {
+    let stored = []
+    for k in 0..<nt {
+      let mut s = 0.0
+      for y in tcols[k] {
+        s += y.to_double()
+      }
+      let (b, m) = mean_intercept(p.objective, s / n.to_double())
+      stored.push(xgb_float_text(b))
+      group_margins.push(m)
+    }
+    ("[" + stored.join(",") + "]", group_margins[0])
+  } else {
+    (base_text, base_margin)
   }
   let kind = match p.objective {
     "reg:squarederror" => 0
@@ -2864,12 +2942,10 @@ fn train_json(
   }
   // margins accumulate in float32, as XGBoost predicts
   let margin = FixedArray::make(n * groups, Float::from_double(base_margin))
-  if kind == 8 && groups > 1 {
-    // per-quantile intercepts, as written in base_text
-    let bs = parse_base_score(base_text) catch { _ => [] }
+  if group_margins.length() > 1 {
     for r in 0..<n {
       for k in 0..<groups {
-        margin[r * groups + k] = bs[k]
+        margin[r * groups + k] = Float::from_double(group_margins[k])
       }
     }
   }
@@ -2922,6 +2998,8 @@ fn train_json(
       FixedArray::make(0, 0.0)
     }
     for k in 0..<groups {
+      // this output's labels
+      let label = if nt > 1 { tcols[k][:] } else { label }
       let mut gsum = 0.0
       let mut hsum = 0.0
       // bounds on |g| and h: known for the logistic losses, measured for

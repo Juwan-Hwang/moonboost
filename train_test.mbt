@@ -409,6 +409,64 @@ test "reg:quantileerror with several quantiles matches one model per quantile" {
 }
 
 ///|
+test "several outputs match one model per output" {
+  let (x, y) = toy(1500)
+  let n = y.length()
+  let objs = [
+    "reg:squarederror", "reg:pseudohubererror", "reg:absoluteerror", "binary:logistic",
+    "binary:logitraw",
+  ]
+  for o in objs {
+    let binary = o.has_prefix("binary:")
+    let col = (r : Int32, k : Int32) => {
+      let v = y[r] * Float::from_int(k + 1) + Float::from_int(k)
+      if binary {
+        if v > Float::from_int(k) {
+          (1.0 : Float)
+        } else {
+          0.0
+        }
+      } else {
+        v
+      }
+    }
+    let both : Array[Float] = Array::makei(n * 2, i => col(i / 2, i % 2))
+    let base = {
+      ..@moonboost.TrainParams::default(),
+      objective: o,
+      num_round: 15,
+      max_depth: 4,
+    }
+    let multi = @moonboost.Model::train(x, both, params={
+      ..base,
+      num_target: 2,
+    })
+    for k in 0..<2 {
+      let one = @moonboost.Model::train(
+        x,
+        Array::makei(n, r => col(r, k)),
+        params=base,
+      )
+      for r in 0..<n {
+        let row = x.data[r * x.cols:(r + 1) * x.cols]
+        assert_eq(
+          multi.predict(row)[k],
+          one.predict(row)[0],
+          msg="\{o} output \{k} row \{r}",
+        )
+      }
+    }
+  }
+  let bad = @moonboost.train_xgboost_json(x, y, params={
+    ..@moonboost.TrainParams::default(),
+    num_target: 2,
+  }) catch {
+    _ => "error"
+  }
+  assert_eq(bad, "error")
+}
+
+///|
 test "labels and settings outside an objective's domain are refused" {
   let (x, y) = toy(100)
   let cases = [

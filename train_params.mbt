@@ -117,6 +117,7 @@ fn TrainParams::with_setting(
   match key {
     "objective" => { ..p, objective: setting_string(key, v), }
     "num_class" => { ..p, num_class: setting_int(key, v), }
+    "num_target" => { ..p, num_target: setting_int(key, v), }
     "num_round" | "num_boost_round" | "n_estimators" =>
       { ..p, num_round: setting_int(key, v), }
     "max_depth" => { ..p, max_depth: setting_int(key, v), }

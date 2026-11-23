@@ -1,6 +1,7 @@
 import {
   "Juwan-Hwang/moonboost/kernel",
   "moonbitlang/core/math",
+  "moonbitlang/core/v128",
   "moonbitlang/core/debug",
   "moonbitlang/core/json",
   "moonbitlang/core/string",
@@ -11,7 +12,10 @@ import {
   "moonbitlang/core/float",
 } for "test"
 
+warnings = "-unused_package"
+
 options(
+  "alert-list": "-experimental",
   targets: {
     "lockstep_nodes_int64.mbt": [ "not", "js", "wasm", "wasm-gc" ],
     "lockstep_nodes_wasm.mbt": [ "wasm", "wasm-gc" ],
@@ -28,5 +32,7 @@ options(
     "xgboost_src_js.mbt": [ "js" ],
     "train_q.mbt": [ "not", "js" ],
     "train_q_js.mbt": [ "js" ],
+    "train_simd.mbt": [ "native", "wasm", "wasm-gc" ],
+    "train_logistic.mbt": [ "js" ],
   },
 )

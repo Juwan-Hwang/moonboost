@@ -2120,6 +2120,9 @@ fn Grower::gradients(
   let rows = self.rows
   let mut gsum = gsum
   let mut hsum = hsum
+  if kind == 1 {
+    return self.logistic_gradients(label, margin, groups, k, lo, hi, gsum, hsum)
+  }
   let qa = quantile_alpha_of(self.p, k)
   for r in lo..<hi {
     let y = label[r].to_double()

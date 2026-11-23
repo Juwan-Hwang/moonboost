@@ -250,6 +250,10 @@ held-out pinball loss with `min_data_in_leaf: 20` (LightGBM's default):
 moonboost's loss is about 0.5% below XGBoost's (five to ten standard
 errors per seed) and 0.04 to 0.13% above LightGBM's (about one standard
 error per seed).
+The leaf values need only two order statistics of each leaf's residuals,
+which are selected rather than sorted for: one quantile model trains in
+0.35 to 0.42 s against XGBoost's 0.74 to 0.76 s and LightGBM's 0.44 to
+0.51 s (seed 0, alpha 0.5 and 0.9, one thread).
 
 Several quantiles fit in one model: `quantile_alphas: [0.1, 0.5, 0.9]`
 (or `"quantile_alpha": [0.1, 0.5, 0.9]` in `TrainParams::from_json`, or

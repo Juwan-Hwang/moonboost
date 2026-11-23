@@ -70,3 +70,43 @@ test "one-byte and two-byte copied bins train the same model" {
     assert_eq(train_json(m, label, lg, true), train_json(m, label, lg, false))
   }
 }
+
+///|
+test "quantile by selection matches quantile of the sorted values" {
+  let mut s = 7
+  for n in [1, 2, 3, 5, 17, 100, 1000, 4097] {
+    for dup in [false, true] {
+      let xs = FixedArray::makei(n, _ => {
+        s = (s * 1103515245 + 12345) & 0x7fffffff
+        let v = s % 100000
+        Float::from_int(if dup { v % 7 } else { v })
+      })
+      let sorted = FixedArray::makei(n, i => xs[i])
+      sorted.sort()
+      for alpha in [0.01, 0.1, 0.25, 0.5, 0.77, 0.9, 0.99] {
+        let nd = n.to_double()
+        let want = if alpha <= 1.0 / (nd + 1.0) {
+          sorted[0].to_double()
+        } else if alpha >= nd / (nd + 1.0) {
+          sorted[n - 1].to_double()
+        } else {
+          let x = alpha * (nd + 1.0)
+          let k = x.floor() - 1.0
+          let d = x - 1.0 - k
+          let v0 = sorted[k.to_int()].to_double()
+          v0 + d * (sorted[k.to_int() + 1].to_double() - v0)
+        }
+        let work = FixedArray::makei(n + 2, i => {
+          if i == 0 || i == n + 1 {
+            Float::from_int(-1)
+          } else {
+            xs[i - 1]
+          }
+        })
+        assert_eq(quantile_range(work, 1, n + 1, alpha), want)
+        assert_eq(work[0], Float::from_int(-1))
+        assert_eq(work[n + 1], Float::from_int(-1))
+      }
+    }
+  }
+}

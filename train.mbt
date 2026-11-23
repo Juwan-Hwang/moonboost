@@ -2266,27 +2266,139 @@ fn add_leaves(
 }
 
 ///|
-/// The alpha quantile of xs (sorted in place), interpolated as XGBoost's
+/// The alpha quantile of xs (reordered in place), interpolated as XGBoost's
 /// `common::Quantile` does; NaN when xs is empty.
 fn quantile(xs : FixedArray[Float], alpha : Double) -> Double {
-  let n = xs.length()
+  quantile_range(xs, 0, xs.length(), alpha)
+}
+
+///|
+/// The alpha quantile of xs[lo:hi], which it reorders: the two order
+/// statistics the interpolation needs are selected rather than sorted for.
+fn quantile_range(
+  xs : FixedArray[Float],
+  lo : Int32,
+  hi : Int32,
+  alpha : Double,
+) -> Double {
+  let n = hi - lo
   if n == 0 {
     return 0.0 / 0.0
   }
-  xs.sort()
   let nd = n.to_double()
   if alpha <= 1.0 / (nd + 1.0) {
-    return xs[0].to_double()
+    let mut v = xs[lo]
+    for i in (lo + 1)..<hi {
+      if xs[i] < v {
+        v = xs[i]
+      }
+    }
+    return v.to_double()
   }
   if alpha >= nd / (nd + 1.0) {
-    return xs[n - 1].to_double()
+    let mut v = xs[lo]
+    for i in (lo + 1)..<hi {
+      if xs[i] > v {
+        v = xs[i]
+      }
+    }
+    return v.to_double()
   }
   let x = alpha * (nd + 1.0)
   let k = x.floor() - 1.0
   let d = x - 1.0 - k
-  let v0 = xs[k.to_int()].to_double()
-  let v1 = xs[k.to_int() + 1].to_double()
-  v0 + d * (v1 - v0)
+  let at = lo + k.to_int()
+  select_kth(xs, lo, hi, at)
+  // the next order statistic: the least of what lies above it
+  let mut v1 = xs[at + 1]
+  for i in (at + 2)..<hi {
+    if xs[i] < v1 {
+      v1 = xs[i]
+    }
+  }
+  let v0 = xs[at].to_double()
+  v0 + d * (v1.to_double() - v0)
+}
+
+///|
+/// Reorders xs[lo:hi] so xs[k] holds the value it would hold sorted, with
+/// nothing greater before it and nothing smaller after it (quickselect,
+/// falling back to sorting after too many rounds).
+fn select_kth(
+  xs : FixedArray[Float],
+  lo : Int32,
+  hi : Int32,
+  k : Int32,
+) -> Unit {
+  let mut l = lo
+  let mut h = hi - 1
+  let mut budget = 64
+  while h > l {
+    if budget == 0 && h - l >= 16 {
+      let part = FixedArray::makei(h - l + 1, i => xs[l + i])
+      part.sort()
+      for i, v in part {
+        xs[l + i] = v
+      }
+      return
+    }
+    if h - l < 16 {
+      // insertion sort of xs[l..h]
+      for i in (l + 1)..<=h {
+        let v = xs[i]
+        let mut j = i - 1
+        while j >= l && xs[j] > v {
+          xs[j + 1] = xs[j]
+          j -= 1
+        }
+        xs[j + 1] = v
+      }
+      return
+    }
+    budget -= 1
+    let a = xs[l]
+    let b = xs[l + (h - l) / 2]
+    let c = xs[h]
+    let pivot = if a < b {
+      if b < c {
+        b
+      } else if a < c {
+        c
+      } else {
+        a
+      }
+    } else if a < c {
+      a
+    } else if b < c {
+      c
+    } else {
+      b
+    }
+    let mut i = l
+    let mut j = h
+    while i <= j {
+      while xs[i] < pivot {
+        i += 1
+      }
+      while xs[j] > pivot {
+        j -= 1
+      }
+      if i <= j {
+        let t = xs[i]
+        xs[i] = xs[j]
+        xs[j] = t
+        i += 1
+        j -= 1
+      }
+    }
+    if k <= j {
+      h = j
+    } else if k >= i {
+      l = i
+    } else {
+      return
+    }
+  }
 }
 
 ///|
@@ -2326,8 +2438,9 @@ fn quantile_leaves(
   for v in 0..<nodes {
     let c = start[v + 1] - start[v]
     if c > 0 {
-      let xs = FixedArray::makei(c, j => res[start[v] + j])
-      tree.split_cond[v] = Float::from_double(quantile(xs, alpha) * eta)
+      tree.split_cond[v] = Float::from_double(
+        quantile_range(res, start[v], start[v + 1], alpha) * eta,
+      )
     }
   }
 }

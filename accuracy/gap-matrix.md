@@ -23,7 +23,7 @@
 |---|---|---|---|
 | 准确率 airline（同叶数 255/1023/4095） | .7629/.7779/.7868 | LightGBM .7612/.7761/.7829 | ✅ |
 | 准确率 OpenML 10 个二分类（5 次重复划分 × 12 组等预算调参，R2 含采样） | 对 LightGBM：amazon +.0053、electricity +.0047、phoneme +.0052（均 >2.5 se），其余持平；对 XGBoost：10 个全部持平 | XGBoost/LightGBM | 对 LGB 部分✅，对 XGB ≈ |
-| 单线程训练速度 GBM-perf 1M | 3.9 s | LightGBM 6.0 s | ✅ |
+| 单线程训练速度 GBM-perf 1M | 3.7–3.8 s（11-23 同会话；logistic/softmax 梯度 v128 SIMD） | LightGBM 6.2 s，XGBoost 7.8–7.9 s | ✅ |
 | 多线程训练速度 | 不支持（MoonBit 无线程） | XGBoost 16 核 2.7 s（GBM-perf 官方，不同硬件） | ❌ |
 | 推理速度 native vs XGBoost C API | 见 README | | ✅（README） |
 | 浏览器推理 | 见 README | onnxruntime-web | ✅（README） |
@@ -33,7 +33,7 @@
 | 包体积 JS | 270 KB / 77 KB gz | ort-web 14.8 MB wasm | ✅ |
 | 类别特征训练 | 有（one-vs-rest + 排序划分，XGBoost 格式） | LightGBM/XGBoost/CatBoost | ✅（airline 同叶数更准） |
 | 按叶生长 | 有（lossguide，叶堆） | LightGBM | ≈/✅（11-21 核 2 同会话，带类别：255 叶 6.4 vs 6.5 s；1023 叶 8.8 vs 9.2 s；AUC 均更高；4095 见 log） |
-| 训练目标函数种类 | 19 种（11-23 rank:map 对 XGB MAP +0.0024 显著、survival:aft 1.4–2.4× 快；11-21 加 absoluteerror、quantileerror；11-21 rank:ndcg/pairwise；11-22 binary:hinge、survival:cox，速度快于 XGBoost、精度持平；分位数叶；XGBoost 加载逐位一致；10 万行 4 种子：三项均优于 XGBoost 约 0.5%，比 LightGBM 差 0.04–0.13%（约 1 se）） | reg:logistic 以外的 multi:… 等 | ❌（缩小） |
+| 训练目标函数种类 | 19 种（已覆盖 XGBoost 全部 19 个 objective）（11-23 rank:map 对 XGB MAP +0.0024 显著、survival:aft 1.4–2.4× 快；11-21 加 absoluteerror、quantileerror；11-21 rank:ndcg/pairwise；11-22 binary:hinge、survival:cox，速度快于 XGBoost、精度持平；分位数叶；XGBoost 加载逐位一致；10 万行 4 种子：三项均优于 XGBoost 约 0.5%，比 LightGBM 差 0.04–0.13%（约 1 se）） | reg:logistic 以外的 multi:… 等 | ❌（缩小） |
 | 行/列采样（subsample、colsample_bytree/bynode） | 有；11-20 起只在保留行上建树。airline 带类别 sub 0.5：255 叶 4.0 s vs LGB 11.3 / XGB 22.2，1023 叶 6.1 vs 14.3 / 33.6，AUC 均最高 | XGBoost/LightGBM | 采样训练速度 ✅（单线程）；功能 ≈ |
 | min_data_in_leaf（按 hessian 估计行数，同 LightGBM） | 有（11-19 加） | LightGBM；XGBoost 无 | ≈ |
 | 梯度采样（GOSS/MVS） | 有 MVS（sampling_method=gradient_based，CPU；同采样率优于均匀采样，0.5 时 4 个数据集 +.003～.0075） | LightGBM GOSS、CatBoost MVS；XGBoost 仅 GPU | ≈（对 XGBoost CPU ✅）；11-20 起未采样行不进直方图，阈值两遍精确解，比旧版快 28% |

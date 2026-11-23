@@ -1592,6 +1592,119 @@ fn Grower::partition_copy(
 }
 
 ///|
+/// Copy levels for loss-guided trees, which grow deep along their largest
+/// nodes: below the first copy, a fresh one every recopy_every levels.
+/// (Depth-wise trees gained nothing from more than one.)
+let max_copies = 6
+
+///|
+let recopy_every = 3
+
+///|
+/// Partitions rows[lo:hi] (positions of copy level `level`, at least 1,
+/// one-byte bins) like `partition`, copying each row's bins, gradients and
+/// level-1 position to level + 1 at its new position, so the children's
+/// rows are dense again; the children's rows in scratch are those
+/// positions.
+fn Grower::recopy(
+  self : Grower,
+  lo : Int32,
+  hi : Int32,
+  s : Split,
+  level : Int32,
+) -> Int32 {
+  let rows = self.rows
+  let dst = self.scratch
+  let words = self.words
+  let cb = self.cbins[level - 1]
+  let q = self.cq[level - 1]
+  let gh = self.cgh[level - 1]
+  let tb = self.cbins[level]
+  let tq = self.cq[level]
+  let tg = self.cgh[level]
+  let to = self.orig[level]
+  let column = s.feature / word_bins
+  let shift = s.feature % word_bins * 8
+  let go = self.left_table(s)
+  let mut a = lo
+  let mut b = hi - 1
+  // orig[level] holds level-1 positions: level 1's own, or mapped down
+  if level == 1 {
+    for i in lo..<hi {
+      let r = rows.unsafe_get(i)
+      let src = r * words
+      let left = go.unsafe_get(word_byte(cb.unsafe_get(src + column), shift))
+      let p = b + (a - b) * left
+      let at = p * words
+      for w in 0..<words {
+        tb.unsafe_set(at + w, cb.unsafe_get(src + w))
+      }
+      q_copy(tq, p, q, r)
+      tg.unsafe_set(p * 2, gh.unsafe_get(r * 2))
+      tg.unsafe_set(p * 2 + 1, gh.unsafe_get(r * 2 + 1))
+      to.unsafe_set(p, r)
+      a += left
+      b -= 1 - left
+    }
+  } else {
+    let fo = self.orig[level - 1]
+    for i in lo..<hi {
+      let r = rows.unsafe_get(i)
+      let src = r * words
+      let left = go.unsafe_get(word_byte(cb.unsafe_get(src + column), shift))
+      let p = b + (a - b) * left
+      let at = p * words
+      for w in 0..<words {
+        tb.unsafe_set(at + w, cb.unsafe_get(src + w))
+      }
+      q_copy(tq, p, q, r)
+      tg.unsafe_set(p * 2, gh.unsafe_get(r * 2))
+      tg.unsafe_set(p * 2 + 1, gh.unsafe_get(r * 2 + 1))
+      to.unsafe_set(p, fo.unsafe_get(r))
+      a += left
+      b -= 1 - left
+    }
+  }
+  for i in lo..<hi {
+    dst.unsafe_set(i, i)
+  }
+  a
+}
+
+///|
+/// Whether a node at `depth` and copy level `level` partitions into the
+/// next level's copy.
+fn Grower::copies(self : Grower, depth : Int32, level : Int32) -> Bool {
+  level < self.cgh.length() &&
+  (self.p.max_depth <= 0 || depth + 1 < self.p.max_depth) &&
+  (if level == 0 {
+    depth + 1 == self.compact_at[0]
+  } else {
+    self.narrow && depth + 1 == self.compact_at[level]
+  })
+}
+
+///|
+/// Partitions rows[lo:hi] of a node at `depth` and level `level`; returns
+/// the right part's start and the children's level.
+fn Grower::split_rows(
+  self : Grower,
+  lo : Int32,
+  hi : Int32,
+  s : Split,
+  depth : Int32,
+  level : Int32,
+) -> (Int32, Int32) {
+  if !self.copies(depth, level) {
+    (self.partition(lo, hi, s, level), level)
+  } else if level == 0 {
+    (self.partition_copy(lo, hi, s), 1)
+  } else {
+    (self.recopy(lo, hi, s, level), level + 1)
+  }
+}
+
+///|
 /// Makes node a leaf of rows[lo:hi]: its value from the rows' exact
 /// gradient sums, and leaf_at (and orig[0] above the copy depth) for
 /// adding it to the margins.
@@ -1612,7 +1725,16 @@ fn Grower::finish_leaf(
   // positions in rows[lo:hi] are those of one copy level (there is at
   // most one); a leaf above it is given the positions lo..hi, which no
   // copied subtree uses
-  if level > 0 {
+  if level > 1 {
+    // positions of deeper levels map to level 1's in orig[level - 1]
+    let o = self.orig[level - 1]
+    for i in lo..<hi {
+      let r = rows.unsafe_get(i)
+      eg += gh.unsafe_get(r * 2).to_double()
+      eh += gh.unsafe_get(r * 2 + 1).to_double()
+      leaf_at.unsafe_set(o.unsafe_get(r), node)
+    }
+  } else if level > 0 {
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
       eg += gh.unsafe_get(r * 2).to_double()
@@ -1808,19 +1930,11 @@ fn Grower::grow_lossguide(
     let hi = p.hi
     let depth = p.depth
     let level = p.level
-    let copy = level == 0 &&
-      self.compact_at.length() > 0 &&
-      depth + 1 == self.compact_at[0]
     self.use_rows(p.in_scratch, a0, b0)
-    let mid = if copy {
-      self.partition_copy(lo, hi, s)
-    } else {
-      self.partition(lo, hi, s, level)
-    }
+    let (mid, level) = self.split_rows(lo, hi, s, depth, level)
     // the children's rows are in the other buffer, which becomes theirs
     let child_scratch = !p.in_scratch
     self.use_rows(child_scratch, a0, b0)
-    let level = if copy { 1 } else { level }
     let (l, r) = self.add_split(tree, p.node, s, p.g, p.h)
     leaves += 1
     let gr = p.g - s.gl
@@ -1930,7 +2044,8 @@ fn Grower::grow(
   depth : Int32,
   level : Int32,
 ) -> Unit {
-  let level = if level < self.compact_at.length() &&
+  let level = if level == 0 &&
+    self.compact_at.length() > 0 &&
     depth >= self.compact_at[level] &&
     depth < self.p.max_depth {
     self.compact(lo, hi, level)
@@ -1948,16 +2063,7 @@ fn Grower::grow(
     Some(s) => {
       // a node just above the copy depth partitions its rows straight
       // into the copy, reading each row once in row order
-      let copy = level == 0 &&
-        self.compact_at.length() > 0 &&
-        depth + 1 == self.compact_at[0] &&
-        depth + 1 < self.p.max_depth
-      let mid = if copy {
-        self.partition_copy(lo, hi, s)
-      } else {
-        self.partition(lo, hi, s, level)
-      }
-      let level = if copy { 1 } else { level }
+      let (mid, level) = self.split_rows(lo, hi, s, depth, level)
       // the children's rows are in scratch; they become the current rows
       // until both children have grown
       self.swap_rows()
@@ -2983,6 +3089,22 @@ fn train_json(
     }
     binned.bins = bins
   }
+  // copy depths: one copy of the original arrays, and for loss-guided
+  // trees with one-byte bins a fresh copy every recopy_every levels below
+  // it while the tree can still grow that deep
+  let compact_at = FixedArray::makei(
+    if narrow && p.grow_policy == "lossguide" {
+      max_copies
+    } else {
+      1
+    },
+    fn(i) { 2 + i * recopy_every },
+  )
+  let levels = compact_at
+    .iter()
+    .filter(fn(d) { p.max_depth <= 0 || d < p.max_depth })
+    .count()
+  let levels = if levels < 1 { 1 } else { levels }
   let gr : Grower = {
     data: binned,
     p,
@@ -2991,12 +3113,12 @@ fn train_json(
     gs: 1.0,
     hs: 1.0,
     igs: 1.0,
-    compact_at: [2],
+    compact_at,
     narrow,
     bins8,
     words,
     by8,
-    cbins: FixedArray::makei(1, fn(_) { words_make(wn) }),
+    cbins: FixedArray::makei(levels, fn(_) { words_make(wn) }),
     cbase,
     wbase: FixedArray::makei(words * word_bins, fn(i) {
       if i < cols {
@@ -3006,9 +3128,9 @@ fn train_json(
       }
     }),
     cbins16: FixedArray::makei(1, fn(_) { u16s_make(copies) }),
-    cq: FixedArray::makei(1, fn(_) { qarr_make(n) }),
-    cgh: FixedArray::makei(1, fn(_) { f32s_make(n * 2) }),
-    orig: FixedArray::makei(1, fn(_) { i32s_make(n) }),
+    cq: FixedArray::makei(levels, fn(_) { qarr_make(n) }),
+    cgh: FixedArray::makei(levels, fn(_) { f32s_make(n * 2) }),
+    orig: FixedArray::makei(levels, fn(_) { i32s_make(n) }),
     ihs: 1.0,
     rows: i32s_make(n),
     scratch: i32s_make(n),

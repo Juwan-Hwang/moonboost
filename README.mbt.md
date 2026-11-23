@@ -137,13 +137,16 @@ thread on one core of the VM above (`bench/airline_categorical.py`):
 
 | Leaves | moonboost | LightGBM 4.7.0 | XGBoost 3.4.1 `hist` |
 |---|---|---|---|
-| 255 | 6.9 s, AUC 0.7629 | 6.5 s, AUC 0.7612 | 20.5 s, AUC 0.7547 |
-| 1023 | 8.8 s, AUC 0.7779 | 9.2 s, AUC 0.7761 | 32.8 s, AUC 0.7638 |
-| 4095 | 16.1 s, AUC 0.7868 | 19.8 s, AUC 0.7829 | 53.9 s, AUC 0.7655 |
+| 255 | 6.0 s, AUC 0.7629 | 6.5 s, AUC 0.7612 | 21.2 s, AUC 0.7547 |
+| 1023 | 8.0 s, AUC 0.7779 | 9.4 s, AUC 0.7761 | 34.3 s, AUC 0.7638 |
+| 4095 | 13.1 s, AUC 0.7868 | 19.9 s, AUC 0.7829 | 58.7 s, AUC 0.7655 |
 
-At every size moonboost's model is the most accurate. At 4095 leaves it
-trains 19% faster than LightGBM and at 1023 leaves 4% faster; at 255
-leaves LightGBM is about as fast (moonboost took 6.4 s in another run). With the categories label-encoded
+At every size moonboost's model is the most accurate, and it trains fastest:
+34% less time than LightGBM at 4095 leaves, 15% less at 1023 and 8% less
+at 255. Loss-guided trees grow deep along their largest nodes, so below the
+first copy of a subtree's rows moonboost copies a node's rows again every
+three levels, keeping the bins and gradients a deep node reads dense and
+contiguous. With the categories label-encoded
 instead, moonboost reaches 0.7520 at depth 10.
 
 ### Sampling and other objectives

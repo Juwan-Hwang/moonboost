@@ -65,6 +65,10 @@ pub(all) struct TrainParams {
   huber_slope : Double
   /// the quantile `reg:quantileerror` predicts, in (0, 1)
   quantile_alpha : Double
+  /// several quantiles at once for `reg:quantileerror`, each in (0, 1):
+  /// when not empty it replaces `quantile_alpha` and the model predicts
+  /// one value per quantile (XGBoost's `quantile_alpha` list)
+  quantile_alphas : Array[Double]
   /// for `rank:ndcg` and `rank:pairwise`: the sizes of the queries, whose
   /// rows are consecutive and in this order (XGBoost's `group`)
   group : Array[Int32]
@@ -113,6 +117,7 @@ pub fn TrainParams::default() -> TrainParams {
     tweedie_variance_power: 1.5,
     huber_slope: 1.0,
     quantile_alpha: 0.5,
+    quantile_alphas: [],
     group: [],
     rank_truncation: 30,
     label_upper_bound: [],
@@ -2102,6 +2107,7 @@ fn Grower::gradients(
   let rows = self.rows
   let mut gsum = gsum
   let mut hsum = hsum
+  let qa = quantile_alpha_of(self.p, k)
   for r in lo..<hi {
     let y = label[r].to_double()
     let m = margin[r * groups + k].to_double()
@@ -2139,14 +2145,7 @@ fn Grower::gradients(
       }
       // reg:absoluteerror and reg:quantileerror: the leaves are set to
       // quantiles of the residuals once the tree is grown
-      8 => {
-        let a = if self.p.objective == "reg:quantileerror" {
-          self.p.quantile_alpha
-        } else {
-          0.5
-        }
-        (if m >= y { 1.0 - a } else { -a }, 1.0)
-      }
+      8 => (if m >= y { 1.0 - qa } else { -qa }, 1.0)
       // reg:squaredlogerror
       7 => {
         let pm = if m < -1.0 + 1.0e-6 { -1.0 + 1.0e-6 } else { m }
@@ -2262,6 +2261,18 @@ fn add_leaves(
   for i in lo..<hi {
     let at = orig.unsafe_get(i) * groups + k
     margin[at] = margin[at] + leaves[leaf_at.unsafe_get(i)]
+  }
+}
+
+///|
+/// The quantile output k of the absolute and quantile losses fits.
+fn quantile_alpha_of(p : TrainParams, k : Int32) -> Double {
+  if p.objective != "reg:quantileerror" {
+    0.5
+  } else if p.quantile_alphas.length() > 0 {
+    p.quantile_alphas[k]
+  } else {
+    p.quantile_alpha
   }
 }
 
@@ -2413,6 +2424,8 @@ fn quantile_leaves(
   m : Int32,
   alpha : Double,
   eta : Double,
+  groups : Int32,
+  k : Int32,
 ) -> Unit {
   let nodes = tree.split_cond.length()
   // positions 0..m reach leaf leaf_at.unsafe_get(i); orig[0] maps them to rows
@@ -2431,7 +2444,7 @@ fn quantile_leaves(
     let r = orig.unsafe_get(i)
     let v = leaf_at.unsafe_get(i)
     res[count[v]] = Float::from_double(
-      label[r].to_double() - margin[r].to_double(),
+      label[r].to_double() - margin[r * groups + k].to_double(),
     )
     count[v] += 1
   }
@@ -2483,10 +2496,15 @@ fn train_json(
     | "reg:pseudohubererror"
     | "reg:squaredlogerror"
     | "reg:absoluteerror"
-    | "reg:quantileerror"
     | "rank:ndcg"
     | "rank:pairwise"
     | "rank:map" => 1
+    "reg:quantileerror" =>
+      if p.quantile_alphas.length() > 0 {
+        p.quantile_alphas.length()
+      } else {
+        1
+      }
     "multi:softprob" | "multi:softmax" => {
       if p.num_class < 2 {
         raise InvalidModel("`num_class` must be at least 2")
@@ -2495,6 +2513,8 @@ fn train_json(
     }
     o => raise Unsupported("training objective \{o}")
   }
+  let softmax = p.objective == "multi:softprob" ||
+    p.objective == "multi:softmax"
   for y in label {
     if y.is_nan() {
       raise InvalidModel("missing label")
@@ -2526,7 +2546,7 @@ fn train_json(
         }
       _ => ()
     }
-    if groups > 1 &&
+    if softmax &&
       (
         y < 0.0 ||
         y.to_int() >= groups ||
@@ -2548,9 +2568,16 @@ fn train_json(
   if p.objective == "reg:pseudohubererror" && !(p.huber_slope > 0.0) {
     raise InvalidModel("huber_slope must be positive")
   }
-  if p.objective == "reg:quantileerror" &&
-    !(p.quantile_alpha > 0.0 && p.quantile_alpha < 1.0) {
-    raise InvalidModel("quantile_alpha must be in (0, 1)")
+  if p.objective == "reg:quantileerror" {
+    for k in 0..<groups {
+      let a = quantile_alpha_of(p, k)
+      if !(a > 0.0 && a < 1.0) {
+        raise InvalidModel("quantile_alpha must be in (0, 1)")
+      }
+      if k > 0 && !(quantile_alpha_of(p, k - 1) < a) {
+        raise InvalidModel("quantile_alpha must be in ascending order")
+      }
+    }
   }
   let is_rank = p.objective == "rank:ndcg" ||
     p.objective == "rank:pairwise" ||
@@ -2602,22 +2629,19 @@ fn train_json(
   } else {
     FixedArray::make(0, 0.0)
   }
-  // the quantile the absolute and quantile losses fit, in leaves too
-  let alpha = if p.objective == "reg:quantileerror" {
-    p.quantile_alpha
-  } else {
-    0.5
-  }
   let (base_text, base_margin) = match p.objective {
     "reg:squarederror" | "reg:pseudohubererror" => {
       let b = Float::from_double(mean)
       ("[" + xgb_float_text(b) + "]", b.to_double())
     }
     "reg:absoluteerror" | "reg:quantileerror" => {
-      let b = Float::from_double(
-        quantile(FixedArray::makei(n, i => label[i]), alpha),
-      )
-      ("[" + xgb_float_text(b) + "]", b.to_double())
+      // one intercept per quantile; base_margins carries them
+      let b = Array::makei(groups, k => {
+        Float::from_double(
+          quantile(FixedArray::makei(n, i => label[i]), quantile_alpha_of(p, k)),
+        )
+      })
+      ("[" + b.map(xgb_float_text).join(",") + "]", b[0].to_double())
     }
     "reg:squaredlogerror" => {
       // the prediction whose log1p is the mean log1p of the labels
@@ -2840,6 +2864,15 @@ fn train_json(
   }
   // margins accumulate in float32, as XGBoost predicts
   let margin = FixedArray::make(n * groups, Float::from_double(base_margin))
+  if kind == 8 && groups > 1 {
+    // per-quantile intercepts, as written in base_text
+    let bs = parse_base_score(base_text) catch { _ => [] }
+    for r in 0..<n {
+      for k in 0..<groups {
+        margin[r * groups + k] = bs[k]
+      }
+    }
+  }
   // rows left out of a sampled tree, and a buffer for routing them
   let (out_rows, out_scratch) = if p.subsample < 1.0 {
     (i32s_make(n), i32s_make(n))
@@ -2851,7 +2884,7 @@ fn train_json(
   let prob = FixedArray::make(groups, 0.0)
   for _ in 0..<p.num_round {
     // softmax probabilities are computed once per round for all classes
-    let probs = if groups > 1 {
+    let probs = if softmax {
       let out = FixedArray::make(n * groups, 0.0)
       for r in 0..<n {
         let mut mx = margin[r * groups].to_double()
@@ -2979,7 +3012,17 @@ fn train_json(
         gr.grow(tree, root, 0, m, hist, qg * gr.igs, qh * gr.ihs, 0, 0)
       }
       if kind == 8 {
-        quantile_leaves(tree, gr, label, margin, m, alpha, p.eta)
+        quantile_leaves(
+          tree,
+          gr,
+          label,
+          margin,
+          m,
+          quantile_alpha_of(p, k),
+          p.eta,
+          groups,
+          k,
+        )
       }
       let leaves = FixedArray::from_array(tree.split_cond)
       if m < n {
@@ -3017,11 +3060,12 @@ fn train_json(
   buf.write_string(",\"trees\":[")
   buf.write_string(trees.to_string())
   buf.write_string("]},\"name\":\"gbtree\"},\"learner_model_param\":{")
-  let num_class = if groups > 1 { groups } else { 0 }
+  let num_class = if softmax { groups } else { 0 }
+  let num_target = if softmax { 1 } else { groups }
   buf.write_string(
-    "\"base_score\":\"\{base_text}\",\"boost_from_average\":\"1\",\"num_class\":\"\{num_class}\",\"num_feature\":\"\{data.cols}\",\"num_target\":\"1\"},",
+    "\"base_score\":\"\{base_text}\",\"boost_from_average\":\"1\",\"num_class\":\"\{num_class}\",\"num_feature\":\"\{data.cols}\",\"num_target\":\"\{num_target}\"},",
   )
-  if groups > 1 {
+  if softmax {
     buf.write_string(
       "\"objective\":{\"name\":\"\{p.objective}\",\"softmax_multiclass_param\":{\"num_class\":\"\{groups}\"}}",
     )
@@ -3039,7 +3083,9 @@ fn train_json(
       "survival:aft" =>
         ",\"aft_loss_param\":{\"aft_loss_distribution\":\"\{p.aft_loss_distribution}\",\"aft_loss_distribution_scale\":\"\{Float::from_double(p.aft_loss_distribution_scale)}\"}"
       "reg:quantileerror" =>
-        ",\"quantile_loss_param\":{\"quantile_alpha\":\"[\{p.quantile_alpha}]\"}"
+        ",\"quantile_loss_param\":{\"quantile_alpha\":\"[" +
+        Array::makei(groups, k => quantile_alpha_of(p, k).to_string()).join(",") +
+        "]\"}"
       _ => ",\"reg_loss_param\":{\"scale_pos_weight\":\"1\"}"
     }
     buf.write_string("\"objective\":{\"name\":\"\{p.objective}\"\{param}}")

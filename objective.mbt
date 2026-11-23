@@ -78,6 +78,9 @@ fn sigmoid(x : Float) -> Float {
 /// For `Softmax` the result has a single element: the predicted class.
 pub fn Objective::transform(self : Objective, margins : Array[Float]) -> Unit {
   match self {
+    // several quantiles: XGBoost sorts each row's predictions so they
+    // never cross (its alphas are ascending)
+    Identity("reg:quantileerror") => if margins.length() > 1 { margins.sort() }
     Identity(_) => ()
     Logistic(_) =>
       for i in 0..<margins.length() {

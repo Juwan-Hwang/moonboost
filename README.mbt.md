@@ -251,6 +251,27 @@ moonboost's loss is about 0.5% below XGBoost's (five to ten standard
 errors per seed) and 0.04 to 0.13% above LightGBM's (about one standard
 error per seed).
 
+Several quantiles fit in one model: `quantile_alphas: [0.1, 0.5, 0.9]`
+(or `"quantile_alpha": [0.1, 0.5, 0.9]` in `TrainParams::from_json`, or
+`--quantile-alpha 0.1,0.5,0.9`) grows one tree per quantile each round
+and saves XGBoost's multi-target model, `num_target` 3; predictions come
+sorted per row, as XGBoost returns them, so the quantiles never cross.
+On the same data, four seeds, 100 rounds, depth 6, one thread
+(`bench/train_multiquantile.py`, data loading included), XGBoost
+predicts the same bits from our model; LightGBM has no multi-quantile
+objective, so it trains three models. Mean held-out pinball loss with
+`min_data_in_leaf: 20`:
+
+| | moonboost | XGBoost 3.4.1 `hist` | LightGBM 4.7.0 (3 models) |
+|---|---|---|---|
+| Training time | 1.07 s | 2.10 s | 1.44 s |
+| alpha 0.1 | 0.42260 | 0.42432 | 0.42238 |
+| alpha 0.5 | 0.69731 | 0.69900 | 0.69703 |
+| alpha 0.9 | 0.42247 | 0.42646 | 0.42237 |
+
+The loss is below XGBoost's for every seed and quantile, and within
+about one standard error of LightGBM's (above it in 9 of 12 cases).
+
 ### Ranking
 
 `rank:ndcg` is LambdaRank: within each query (`group`, the query sizes in

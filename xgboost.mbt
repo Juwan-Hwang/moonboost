@@ -99,7 +99,19 @@ fn model_from_src(root : Src) -> Model raise ModelError {
     learner.field("objective").field("name").string("objective.name"),
     num_class~,
   )
-  let num_group = if num_class > 1 { num_class } else { 1 }
+  // a multi-output model (several quantiles) has one group per target
+  let num_target = if lmp.has("num_target") {
+    param_int(lmp, "num_target")
+  } else {
+    1
+  }
+  let num_group = if num_class > 1 {
+    num_class
+  } else if num_target > 1 {
+    num_target
+  } else {
+    1
+  }
   let gb = learner.field("gradient_booster")
   let booster = gb.field("name").string("gradient_booster.name")
   // optional; anything but an array of strings is ignored as before

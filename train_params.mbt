@@ -75,6 +75,25 @@ fn setting_ints(key : String, v : Json) -> Array[Int32] raise ModelError {
 }
 
 ///|
+/// A list of numbers: a JSON array, or a string `"0.1,0.5"` or `"[0.1,0.5]"`.
+fn setting_numbers(key : String, v : Json) -> Array[Double] raise ModelError {
+  match v {
+    Array(a) => a.map(x => setting_number(key, x))
+    String(s) => {
+      let out = []
+      for part in s.trim(chars="[] ").split(",") {
+        let t = part.trim()
+        if t.length() > 0 {
+          out.push(setting_number(key, Json::string(t.to_owned())))
+        }
+      }
+      out
+    }
+    _ => raise InvalidModel("`\{key}` should be a number or a list of numbers")
+  }
+}
+
+///|
 /// A list of numbers, where `null`, `"inf"` or `"Infinity"` is +inf.
 fn setting_floats(key : String, v : Json) -> Array[Float] raise ModelError {
   guard v is Array(a) else {
@@ -123,7 +142,21 @@ fn TrainParams::with_setting(
     "tweedie_variance_power" =>
       { ..p, tweedie_variance_power: setting_number(key, v), }
     "huber_slope" => { ..p, huber_slope: setting_number(key, v), }
-    "quantile_alpha" => { ..p, quantile_alpha: setting_number(key, v), }
+    "quantile_alpha" =>
+      match v {
+        Number(_) | True | False =>
+          { ..p, quantile_alpha: setting_number(key, v), quantile_alphas: [], }
+        String(t) if !t.contains(",") && !t.contains("[") =>
+          { ..p, quantile_alpha: setting_number(key, v), quantile_alphas: [], }
+        _ => {
+          let a = setting_numbers(key, v)
+          if a.length() == 1 {
+            { ..p, quantile_alpha: a[0], quantile_alphas: [], }
+          } else {
+            { ..p, quantile_alphas: a, }
+          }
+        }
+      }
     "group" => { ..p, group: setting_ints(key, v), }
     "rank_truncation" | "lambdarank_num_pair_per_sample" =>
       { ..p, rank_truncation: setting_int(key, v), }
@@ -134,4 +167,14 @@ fn TrainParams::with_setting(
       { ..p, aft_loss_distribution_scale: setting_number(key, v), }
     _ => raise Unsupported("training parameter `\{key}`")
   }
+}
+
+///|
+/// Sets `reg:quantileerror`'s quantile from text: one number (`"0.9"`), or
+/// several (`"0.1,0.5,0.9"`) for a model with one output per quantile.
+pub fn TrainParams::with_quantile_alpha(
+  self : TrainParams,
+  text : String,
+) -> TrainParams raise ModelError {
+  self.with_setting("quantile_alpha", Json::string(text))
 }

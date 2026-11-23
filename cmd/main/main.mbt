@@ -28,6 +28,7 @@ const USAGE : String =
   #|  --group sizes.txt  (rank: one query size per line, rows in order)
   #|  --rank-truncation 30  (rank: pair only within the top N, 0 all)
   #|  --tweedie-variance-power 1.5  --huber-slope 1  --quantile-alpha 0.5
+  #|  --quantile-alpha 0.1,0.5,0.9  (several quantiles: one output each)
   #|  --num-class K  --rounds 10  --depth 6  --eta 0.3  --lambda 1
   #|  --gamma 0  --min-child-weight 1  --max-bin 256  --header
   #|  --categorical 0,3,4  (columns of category codes)
@@ -319,7 +320,9 @@ fn train(args : ArrayView[String]) -> Unit raise {
       "--sampling-method" => p = { ..p, sampling_method: next(), }
       "--tweedie-variance-power" => p = { ..p, tweedie_variance_power: num(), }
       "--huber-slope" => p = { ..p, huber_slope: num(), }
-      "--quantile-alpha" => p = { ..p, quantile_alpha: num(), }
+      "--quantile-alpha" =>
+        // one quantile, or several as "0.1,0.5,0.9"
+        p = p.with_quantile_alpha(next())
       "--colsample-bytree" => p = { ..p, colsample_bytree: num(), }
       "--colsample-bynode" => p = { ..p, colsample_bynode: num(), }
       "--seed" => p = { ..p, seed: @string.parse_int(next()), }

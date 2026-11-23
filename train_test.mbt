@@ -368,6 +368,47 @@ test "reg:quantileerror predicts the asked quantile" {
 }
 
 ///|
+test "reg:quantileerror with several quantiles matches one model per quantile" {
+  let (x, y) = toy(2000)
+  let alphas = [0.1, 0.5, 0.9]
+  let base = {
+    ..@moonboost.TrainParams::default(),
+    objective: "reg:quantileerror",
+    num_round: 20,
+    max_depth: 4,
+  }
+  let multi = @moonboost.Model::train(x, y, params={
+    ..base,
+    quantile_alphas: alphas,
+  })
+  let from_text = @moonboost.TrainParams::from_json(
+    "{\"quantile_alpha\": \"[0.1,0.5,0.9]\"}",
+    base~,
+  )
+  assert_eq(from_text.quantile_alphas, alphas)
+  for k, a in alphas {
+    let one = @moonboost.Model::train(x, y, params={
+      ..base,
+      quantile_alpha: a,
+    })
+    for r in 0..<y.length() {
+      let row = x.data[r * x.cols:(r + 1) * x.cols]
+      assert_eq(multi.predict_margin(row)[k], one.predict_margin(row)[0])
+      // predictions come sorted, as XGBoost returns them
+      let p = multi.predict(row)
+      assert_true(p[0] <= p[1] && p[1] <= p[2])
+    }
+  }
+  let unsorted = @moonboost.train_xgboost_json(x, y, params={
+    ..base,
+    quantile_alphas: [0.9, 0.1],
+  }) catch {
+    _ => "error"
+  }
+  assert_eq(unsorted, "error")
+}
+
+///|
 test "labels and settings outside an objective's domain are refused" {
   let (x, y) = toy(100)
   let cases = [

@@ -133,6 +133,7 @@ pub(all) struct TrainParams {
   tweedie_variance_power : Double
   huber_slope : Double
   quantile_alpha : Double
+  quantile_alphas : Array[Double]
   group : Array[Int32]
   rank_truncation : Int32
   label_upper_bound : Array[Float]
@@ -141,6 +142,7 @@ pub(all) struct TrainParams {
 }
 pub fn TrainParams::default() -> Self
 pub fn TrainParams::from_json(StringView, base? : Self) -> Self raise ModelError
+pub fn TrainParams::with_quantile_alpha(Self, String) -> Self raise ModelError
 
 pub struct Tree {
   left : Array[Int32]

@@ -92,19 +92,22 @@ On the [GBM-perf](https://github.com/szilard/GBM-perf) airline data (1M
 training rows, 100k test rows, 100 rounds, depth 10, eta 0.1, one thread
 pinned to one core of an otherwise idle 4-vCPU x86 AMD EPYC VM; the 8
 categorical columns are label-encoded, which differs from GBM-perf's own
-setup), two runs each:
+setup), two runs each (JS once):
 
 | Library | Training time | Test AUC |
 |---|---|---|
-| moonboost native | 3.9 s, 3.9 s | 0.7537 |
-| moonboost wasm-gc (Node 26) | 5.6 s | 0.7537 |
-| moonboost JS (Node 26) | 12.6 s | 0.7537 |
-| XGBoost 3.4.1 `hist` | 7.5 s, 7.7 s | 0.7533 |
-| LightGBM 4.7.0 (`num_leaves=1024`, `max_depth=10`) | 6.0 s, 6.1 s | 0.7545 |
+| moonboost native | 3.7 s, 3.8 s | 0.7537 |
+| moonboost wasm-gc (Node 26) | 5.6 s, 5.8 s | 0.7537 |
+| moonboost JS (Node 26) | 12.0 s | 0.7537 |
+| XGBoost 3.4.1 `hist` | 7.9 s, 7.8 s | 0.7533 |
+| LightGBM 4.7.0 (`num_leaves=1024`, `max_depth=10`) | 6.2 s, 6.2 s | 0.7545 |
 
-moonboost native takes about half the time of XGBoost and about 35% less
-than LightGBM here (`bench/gbmperf_compare.py`; all three in the same
-session). moonboost's times leave out reading the CSV.
+moonboost native takes under half the time of XGBoost and about 40% less
+than LightGBM here (`bench/gbmperf_compare.py`; all in the same session).
+On native, wasm and wasm-gc the logistic and softmax gradients run two rows
+at a time in 128-bit SIMD lanes (`moonbitlang/core/v128`), with the same
+operations in the same order as the scalar code, so every build still makes
+the same model bit for bit. moonboost's times leave out reading the CSV.
 
 ### Categorical features and loss-guided growth
 

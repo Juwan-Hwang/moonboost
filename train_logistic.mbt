@@ -32,3 +32,16 @@ fn Grower::logistic_gradients(
   }
   (gsum, hsum)
 }
+
+///|
+/// Softmax probabilities of every row and class into out.
+fn softmax_probs(
+  margin : FixedArray[Float],
+  n : Int32,
+  groups : Int32,
+  out : FixedArray[Double],
+) -> Unit {
+  for r in 0..<n {
+    softmax_row(margin, r, groups, out)
+  }
+}

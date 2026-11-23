@@ -2081,6 +2081,33 @@ fn tree_json(
 }
 
 ///|
+/// Softmax probabilities of row r's classes into out.
+fn softmax_row(
+  margin : FixedArray[Float],
+  r : Int32,
+  groups : Int32,
+  out : FixedArray[Double],
+) -> Unit {
+  let a = r * groups
+  let mut mx = margin[a].to_double()
+  for k in 1..<groups {
+    let v = margin[a + k].to_double()
+    if v > mx {
+      mx = v
+    }
+  }
+  let mut sum = 0.0
+  for k in 0..<groups {
+    let e = train_exp(margin[a + k].to_double() - mx)
+    out[a + k] = e
+    sum += e
+  }
+  for k in 0..<groups {
+    out[a + k] = out[a + k] / sum
+  }
+}
+
+///|
 /// A float written the way XGBoost writes its parameters.
 fn xgb_float_text(x : Float) -> String {
   x.to_string()
@@ -3010,29 +3037,12 @@ fn train_json(
   }
   let trees = StringBuilder()
   let mut num_trees = 0
-  let prob = FixedArray::make(groups, 0.0)
+  let prob_buf = FixedArray::make(if softmax { n * groups } else { 0 }, 0.0)
   for _ in 0..<p.num_round {
     // softmax probabilities are computed once per round for all classes
     let probs = if softmax {
-      let out = FixedArray::make(n * groups, 0.0)
-      for r in 0..<n {
-        let mut mx = margin[r * groups].to_double()
-        for k in 1..<groups {
-          let v = margin[r * groups + k].to_double()
-          if v > mx {
-            mx = v
-          }
-        }
-        let mut sum = 0.0
-        for k in 0..<groups {
-          prob[k] = train_exp(margin[r * groups + k].to_double() - mx)
-          sum += prob[k]
-        }
-        for k in 0..<groups {
-          out[r * groups + k] = prob[k] / sum
-        }
-      }
-      out
+      softmax_probs(margin, n, groups, prob_buf)
+      prob_buf
     } else if kind == 11 {
       cox_gradients(label, margin, cox_rows)
     } else if kind == 12 {

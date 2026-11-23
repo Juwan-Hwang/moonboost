@@ -103,3 +103,5 @@
 - 11-23 GBM-perf 同会话复测（depth10 100 轮）：mb native 3.72/3.78 s，wasm-gc 5.63–5.82，JS 12.0；XGB 7.92/7.80；LGB 6.24/6.21；AUC .7537/.7533/.7545 → README 已更新
 - 11-23 窄分箱数值分裂分区改为算术比较（bin=byte+add，免 left_table 查表）：GBM-perf native 3592–3656 → 4178–4239 ms（+15%），wasm-gc 5.64 → 6.19 s，模型同 → 否决（查表更快，算术链更长）
 - 11-23 rank:ndcg 成对梯度 f64x2 两对一组（按类列表的 j）：MSLR 255 叶 30 轮 base 13328–13342 vs new 13034–13379 ms，模型同 → 否决（噪声；成对循环受 gather/scatter 限制）
+- 11-23 窄分箱复制层分区改为按原行查列存 by8（orig 间接）：airline 类别 255 叶 6.3–7.1 → 8.2–8.9 s、Xh depth10 4.9–5.1 → 6.3–6.4 s，模型同 → 否决（1MB 列随机 gather 比顺序读 16B 行更慢）
+- 11-23 lossguide 多级复制（recopy：首次复制下每 3 层把节点行的分箱/梯度/位置再复制成连续区，最多 6 级；更深层 orig 存一级位置，finish_leaf 经 orig 写 leaf_at）：airline 类别 255/1023/4095 叶 −15%/−20%/−25%（6.9–7.2→5.9–6.1，9.5–10.3→7.9，17.2–17.6→13.0），模型逐字节同，native/wasm-gc/JS CLI 输出同。调参：每 4 层次之、每 2 层与 3 层持平、加最小行数阈值（16k/64k）反而慢；depthwise（GBM-perf depth10）每 3/4 层复制为 +5%/持平 → 只对 lossguide 开启。合入 cbf03b0；README 同会话：mb 6.0/8.0/13.1 s vs LGB 6.5/9.4/19.9 vs XGB 21.2/34.3/58.7，AUC 不变

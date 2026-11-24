@@ -366,7 +366,7 @@ fn train_multi_trees(
   margin : FixedArray[Float],
   p : TrainParams,
   kind : Int32,
-  out : StringBuilder,
+  out : @buffer.Buffer,
 ) -> Unit {
   let k = p.num_target
   let cols = binned.cols
@@ -519,7 +519,7 @@ fn train_multi_trees(
       }
     }
     if round > 0 {
-      out.write_char(',')
+      out.write_char_utf8(',')
     }
     multi_tree_json(out, t, round, cols, k)
   }
@@ -529,7 +529,7 @@ fn train_multi_trees(
 /// A vector-leaf tree in XGBoost's JSON layout: a leaf's right child is
 /// its index among the leaves, whose values are in leaf_weights.
 fn multi_tree_json(
-  buf : StringBuilder,
+  buf : @buffer.Buffer,
   t : MultiTree,
   id : Int32,
   num_feature : Int32,
@@ -548,31 +548,31 @@ fn multi_tree_json(
       right.push(t.right[i])
     }
   }
-  buf.write_string("{\"base_weights\":")
+  buf.write_string_utf8("{\"base_weights\":")
   json_floats(buf, t.base_weight)
-  buf.write_string(
+  buf.write_string_utf8(
     ",\"categories\":[],\"categories_nodes\":[],\"categories_segments\":[],\"categories_sizes\":[],\"default_left\":",
   )
   json_ints(buf, t.default_left.map(b => if b { 1 } else { 0 }))
-  buf.write_string(",\"id\":\{id},\"leaf_weights\":")
+  buf.write_string_utf8(",\"id\":\{id},\"leaf_weights\":")
   json_floats(buf, leaf_weights)
-  buf.write_string(",\"left_children\":")
+  buf.write_string_utf8(",\"left_children\":")
   json_ints(buf, t.left)
-  buf.write_string(",\"loss_changes\":")
+  buf.write_string_utf8(",\"loss_changes\":")
   json_floats(buf, t.loss_change)
-  buf.write_string(",\"parents\":")
+  buf.write_string_utf8(",\"parents\":")
   json_ints(buf, t.parent)
-  buf.write_string(",\"right_children\":")
+  buf.write_string_utf8(",\"right_children\":")
   json_ints(buf, right)
-  buf.write_string(",\"split_conditions\":")
+  buf.write_string_utf8(",\"split_conditions\":")
   json_floats(buf, t.split_cond)
-  buf.write_string(",\"split_indices\":")
+  buf.write_string_utf8(",\"split_indices\":")
   json_ints(buf, t.split_index)
-  buf.write_string(",\"split_type\":")
+  buf.write_string_utf8(",\"split_type\":")
   json_ints(buf, Array::make(n, 0))
-  buf.write_string(",\"sum_hessian\":")
+  buf.write_string_utf8(",\"sum_hessian\":")
   json_floats(buf, t.sum_hess)
-  buf.write_string(
+  buf.write_string_utf8(
     ",\"tree_param\":{\"num_deleted\":\"0\",\"num_feature\":\"\{num_feature}\",\"num_nodes\":\"\{n}\",\"size_leaf_vector\":\"\{k}\"}}",
   )
 }

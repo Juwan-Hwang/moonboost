@@ -149,7 +149,8 @@ priv struct Binned {
   // bins[r * cols + f]: `cut_start[f] + 2 * f` when missing, then one per
   // bin (filled by training only when needed)
   mut bins : U16s
-  by_col : U16s
+  // released once training has packed one-byte bins from it
+  mut by_col : U16s
   // cut points of feature f are cuts[cut_start[f] .. cut_start[f + 1]]
   cuts : Array[Float]
   cut_start : FixedArray[Int32]
@@ -2107,47 +2108,65 @@ fn Grower::grow(
 ///|
 /// A float32 as JSON text that XGBoost reads as a number rather than an
 /// integer: it always has a fraction or an exponent.
-fn json_float(buf : StringBuilder, x : Float) -> Unit {
+fn json_float(buf : @buffer.Buffer, x : Float) -> Unit {
   let t = x.to_string()
-  buf.write_string(t)
+  buf.write_string_utf8(t)
   if !(t.contains(".") || t.contains("e") || t.contains("E")) {
-    buf.write_string(".0")
+    buf.write_string_utf8(".0")
   }
 }
 
 ///|
-fn json_floats(buf : StringBuilder, a : Array[Float]) -> Unit {
-  buf.write_char('[')
+fn json_floats(buf : @buffer.Buffer, a : Array[Float]) -> Unit {
+  buf.write_char_utf8('[')
   for i, x in a {
     if i > 0 {
-      buf.write_char(',')
+      buf.write_char_utf8(',')
     }
     json_float(buf, x)
   }
-  buf.write_char(']')
+  buf.write_char_utf8(']')
 }
 
 ///|
-fn json_ints(buf : StringBuilder, a : Array[Int32]) -> Unit {
-  buf.write_char('[')
+/// x in decimal, written byte by byte.
+fn json_int(buf : @buffer.Buffer, x : Int32) -> Unit {
+  if x < 0 {
+    buf.write_byte(b'-')
+  }
+  // digits of |x| as a non-negative Int64, so the lowest Int32 works too
+  let v = x.to_int64().abs()
+  let mut d = 1L
+  while d * 10L <= v {
+    d *= 10L
+  }
+  while d > 0L {
+    buf.write_byte((48L + v / d % 10L).to_byte())
+    d /= 10L
+  }
+}
+
+///|
+fn json_ints(buf : @buffer.Buffer, a : Array[Int32]) -> Unit {
+  buf.write_char_utf8('[')
   for i, x in a {
     if i > 0 {
-      buf.write_char(',')
+      buf.write_char_utf8(',')
     }
-    buf.write_string(x.to_string())
+    json_int(buf, x)
   }
-  buf.write_char(']')
+  buf.write_char_utf8(']')
 }
 
 ///|
 fn tree_json(
-  buf : StringBuilder,
+  buf : @buffer.Buffer,
   t : GrowTree,
   id : Int32,
   num_feature : Int32,
 ) -> Unit {
   let n = t.left.length()
-  buf.write_string("{\"base_weights\":")
+  buf.write_string_utf8("{\"base_weights\":")
   json_floats(buf, t.base_weight)
   let cats : Array[Int32] = []
   let cat_nodes : Array[Int32] = []
@@ -2161,33 +2180,33 @@ fn tree_json(
       cats.append(c)
     }
   }
-  buf.write_string(",\"categories\":")
+  buf.write_string_utf8(",\"categories\":")
   json_ints(buf, cats)
-  buf.write_string(",\"categories_nodes\":")
+  buf.write_string_utf8(",\"categories_nodes\":")
   json_ints(buf, cat_nodes)
-  buf.write_string(",\"categories_segments\":")
+  buf.write_string_utf8(",\"categories_segments\":")
   json_ints(buf, segments)
-  buf.write_string(",\"categories_sizes\":")
+  buf.write_string_utf8(",\"categories_sizes\":")
   json_ints(buf, sizes)
-  buf.write_string(",\"default_left\":")
+  buf.write_string_utf8(",\"default_left\":")
   json_ints(buf, t.default_left.map(b => if b { 1 } else { 0 }))
-  buf.write_string(",\"id\":\{id},\"left_children\":")
+  buf.write_string_utf8(",\"id\":\{id},\"left_children\":")
   json_ints(buf, t.left)
-  buf.write_string(",\"loss_changes\":")
+  buf.write_string_utf8(",\"loss_changes\":")
   json_floats(buf, t.loss_change)
-  buf.write_string(",\"parents\":")
+  buf.write_string_utf8(",\"parents\":")
   json_ints(buf, t.parent.map(p => if p < 0 { 2147483647 } else { p }))
-  buf.write_string(",\"right_children\":")
+  buf.write_string_utf8(",\"right_children\":")
   json_ints(buf, t.right)
-  buf.write_string(",\"split_conditions\":")
+  buf.write_string_utf8(",\"split_conditions\":")
   json_floats(buf, t.split_cond)
-  buf.write_string(",\"split_indices\":")
+  buf.write_string_utf8(",\"split_indices\":")
   json_ints(buf, t.split_index)
-  buf.write_string(",\"split_type\":")
+  buf.write_string_utf8(",\"split_type\":")
   json_ints(buf, t.cats.map(c => if c.length() > 0 { 1 } else { 0 }))
-  buf.write_string(",\"sum_hessian\":")
+  buf.write_string_utf8(",\"sum_hessian\":")
   json_floats(buf, t.sum_hess)
-  buf.write_string(
+  buf.write_string_utf8(
     ",\"tree_param\":{\"num_deleted\":\"0\",\"num_feature\":\"\{num_feature}\",\"num_nodes\":\"\{n}\",\"size_leaf_vector\":\"1\"}}",
   )
 }
@@ -2234,6 +2253,17 @@ pub fn train_xgboost_json(
   label : ArrayView[Float],
   params~ : TrainParams = TrainParams::default(),
 ) -> String raise ModelError {
+  @utf8.decode_lossy(train_json(data, label, params, true))
+}
+
+///|
+/// `train_xgboost_json` as UTF-8 bytes, ready to write to a file: a large
+/// model's document is built once, one byte a character.
+pub fn train_xgboost_json_bytes(
+  data : DenseMatrix,
+  label : ArrayView[Float],
+  params~ : TrainParams = TrainParams::default(),
+) -> Bytes raise ModelError {
   train_json(data, label, params, true)
 }
 
@@ -2649,7 +2679,7 @@ fn train_json(
   label : ArrayView[Float],
   params : TrainParams,
   allow_narrow : Bool,
-) -> String raise ModelError {
+) -> Bytes raise ModelError {
   let p = params
   let n = data.rows
   let nt = p.num_target
@@ -3020,18 +3050,10 @@ fn train_json(
         margin[r * nt + k] = Float::from_double(group_margins[k])
       }
     }
-    let trees = StringBuilder()
+    let trees = @buffer.Buffer()
+    model_head(trees, p.num_round, 1, p)
     train_multi_trees(binned, hist_start, n, label, margin, p, kind, trees)
-    return model_json(
-      trees.to_string(),
-      p.num_round,
-      1,
-      nt,
-      false,
-      base_text,
-      data.cols,
-      p,
-    )
+    return model_tail(trees, nt, false, base_text, data.cols, p)
   }
   // per-feature base of the one-byte copied bins: a feature without
   // missing values never uses its missing slot
@@ -3077,6 +3099,8 @@ fn train_json(
         )
       }
     }
+    // one-byte training reads by8 and bins8 only
+    binned.by_col = u16s_make(0)
   } else {
     let bins = u16s_make(n * cols)
     for f in 0..<cols {
@@ -3163,7 +3187,8 @@ fn train_json(
   } else {
     (i32s_make(0), i32s_make(0))
   }
-  let trees = StringBuilder()
+  let trees = @buffer.Buffer()
+  model_head(trees, p.num_round * groups, groups, p)
   let mut num_trees = 0
   let prob_buf = FixedArray::make(if softmax { n * groups } else { 0 }, 0.0)
   for _ in 0..<p.num_round {
@@ -3310,57 +3335,55 @@ fn train_json(
         )
       }
       if num_trees > 0 {
-        trees.write_char(',')
+        trees.write_char_utf8(',')
       }
       tree_json(trees, tree, num_trees, data.cols)
       num_trees += 1
     }
   }
-  model_json(
-    trees.to_string(),
-    num_trees,
-    groups,
-    groups,
-    softmax,
-    base_text,
-    data.cols,
-    p,
-  )
+  model_tail(trees, groups, softmax, base_text, data.cols, p)
 }
 
 ///|
-/// The XGBoost JSON document around the trees' JSON: `per_round` trees a
-/// round, tree i for output i % per_round.
-fn model_json(
-  trees : String,
+/// The XGBoost JSON document up to its trees' JSON: `num_trees` trees,
+/// `per_round` a round, tree i for output i % per_round. The trees and
+/// `model_tail` follow in the same buffer, so the document is built once.
+fn model_head(
+  buf : @buffer.Buffer,
   num_trees : Int32,
   per_round : Int32,
+  p : TrainParams,
+) -> Unit {
+  buf.write_string_utf8(
+    "{\"learner\":{\"attributes\":{},\"feature_names\":[],\"feature_types\":[],\"gradient_booster\":{\"model\":{\"cats\":{\"enc\":[],\"feature_segments\":[],\"sorted_idx\":[]},",
+  )
+  buf.write_string_utf8(
+    "\"gbtree_model_param\":{\"num_parallel_tree\":\"1\",\"num_trees\":\"\{num_trees}\"},\"iteration_indptr\":",
+  )
+  json_ints(buf, Array::makei(p.num_round + 1, i => i * per_round))
+  buf.write_string_utf8(",\"tree_info\":")
+  json_ints(buf, Array::makei(num_trees, i => i % per_round))
+  buf.write_string_utf8(",\"trees\":[")
+}
+
+///|
+/// The rest of the XGBoost JSON document after the trees' JSON.
+fn model_tail(
+  buf : @buffer.Buffer,
   groups : Int32,
   softmax : Bool,
   base_text : String,
   num_feature : Int32,
   p : TrainParams,
-) -> String {
-  let buf = StringBuilder()
-  buf.write_string(
-    "{\"learner\":{\"attributes\":{},\"feature_names\":[],\"feature_types\":[],\"gradient_booster\":{\"model\":{\"cats\":{\"enc\":[],\"feature_segments\":[],\"sorted_idx\":[]},",
-  )
-  buf.write_string(
-    "\"gbtree_model_param\":{\"num_parallel_tree\":\"1\",\"num_trees\":\"\{num_trees}\"},\"iteration_indptr\":",
-  )
-  json_ints(buf, Array::makei(p.num_round + 1, i => i * per_round))
-  buf.write_string(",\"tree_info\":")
-  json_ints(buf, Array::makei(num_trees, i => i % per_round))
-  buf.write_string(",\"trees\":[")
-  buf.write_string(trees)
-  buf.write_string("]},\"name\":\"gbtree\"},\"learner_model_param\":{")
+) -> Bytes {
+  buf.write_string_utf8("]},\"name\":\"gbtree\"},\"learner_model_param\":{")
   let num_class = if softmax { groups } else { 0 }
   let num_target = if softmax { 1 } else { groups }
-  buf.write_string(
+  buf.write_string_utf8(
     "\"base_score\":\"\{base_text}\",\"boost_from_average\":\"1\",\"num_class\":\"\{num_class}\",\"num_feature\":\"\{num_feature}\",\"num_target\":\"\{num_target}\"},",
   )
   if softmax {
-    buf.write_string(
+    buf.write_string_utf8(
       "\"objective\":{\"name\":\"\{p.objective}\",\"softmax_multiclass_param\":{\"num_class\":\"\{groups}\"}}",
     )
   } else {
@@ -3382,10 +3405,10 @@ fn model_json(
         "]\"}"
       _ => ",\"reg_loss_param\":{\"scale_pos_weight\":\"1\"}"
     }
-    buf.write_string("\"objective\":{\"name\":\"\{p.objective}\"\{param}}")
+    buf.write_string_utf8("\"objective\":{\"name\":\"\{p.objective}\"\{param}}")
   }
-  buf.write_string("},\"version\":[3,4,1]}")
-  buf.to_string()
+  buf.write_string_utf8("},\"version\":[3,4,1]}")
+  buf.to_bytes()
 }
 
 ///|

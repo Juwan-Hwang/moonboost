@@ -402,9 +402,9 @@ fn train(args : ArrayView[String]) -> Unit raise {
     Array::makei(labels.rows, r => labels.row(r)[0])
   }
   let t0 = @env.now()
-  let json = @moonboost.train_xgboost_json(data, label, params=p)
+  let json = @moonboost.train_xgboost_json_bytes(data, label, params=p)
   let t1 = @env.now()
-  @fs.write_string_to_file(out, json)
+  @fs.write_bytes_to_file(out, json)
   println(
     "trained \{data.rows} rows x \{data.cols} features in \{(t1 - t0).to_double()} ms",
   )

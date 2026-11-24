@@ -52,6 +52,12 @@ test "training reduces the error and the model reloads unchanged" {
   assert_true(se < 0.01 * total)
   // training is deterministic
   assert_eq(@moonboost.train_xgboost_json(x, y, params~), json)
+  // the byte form is the same document in UTF-8
+  let bytes = @moonboost.train_xgboost_json_bytes(x, y, params~)
+  assert_eq(bytes.length(), json.length())
+  for i, c in json {
+    assert_eq(bytes[i].to_int(), c.to_int())
+  }
 }
 
 ///|

@@ -12,6 +12,8 @@ pub fn float_key(Float) -> Int32
 
 pub fn train_xgboost_json(DenseMatrix, ArrayView[Float], params? : TrainParams) -> String raise ModelError
 
+pub fn train_xgboost_json_bytes(DenseMatrix, ArrayView[Float], params? : TrainParams) -> Bytes raise ModelError
+
 // Errors
 #derive(Eq, @debug.Debug)
 pub(all) suberror ModelError {

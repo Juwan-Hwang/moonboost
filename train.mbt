@@ -1602,10 +1602,10 @@ let recopy_every = 3
 
 ///|
 /// Partitions rows[lo:hi] (positions of copy level `level`, at least 1,
-/// one-byte bins) like `partition`, copying each row's bins, gradients and
-/// level-1 position to level + 1 at its new position, so the children's
-/// rows are dense again; the children's rows in scratch are those
-/// positions.
+/// one-byte bins) like `partition`, copying each row's bins, quantised
+/// gradients and level-1 position to level + 1 at its new position, so the
+/// children's rows are dense again; the children's rows in scratch are
+/// those positions. (Leaves read exact gradients at level 1 through orig.)
 fn Grower::recopy(
   self : Grower,
   lo : Int32,
@@ -1618,10 +1618,8 @@ fn Grower::recopy(
   let words = self.words
   let cb = self.cbins[level - 1]
   let q = self.cq[level - 1]
-  let gh = self.cgh[level - 1]
   let tb = self.cbins[level]
   let tq = self.cq[level]
-  let tg = self.cgh[level]
   let to = self.orig[level]
   let column = s.feature / word_bins
   let shift = s.feature % word_bins * 8
@@ -1636,12 +1634,15 @@ fn Grower::recopy(
       let left = go.unsafe_get(word_byte(cb.unsafe_get(src + column), shift))
       let p = b + (a - b) * left
       let at = p * words
-      for w in 0..<words {
-        tb.unsafe_set(at + w, cb.unsafe_get(src + w))
+      if words == 2 {
+        tb.unsafe_set(at, cb.unsafe_get(src))
+        tb.unsafe_set(at + 1, cb.unsafe_get(src + 1))
+      } else {
+        for w in 0..<words {
+          tb.unsafe_set(at + w, cb.unsafe_get(src + w))
+        }
       }
       q_copy(tq, p, q, r)
-      tg.unsafe_set(p * 2, gh.unsafe_get(r * 2))
-      tg.unsafe_set(p * 2 + 1, gh.unsafe_get(r * 2 + 1))
       to.unsafe_set(p, r)
       a += left
       b -= 1 - left
@@ -1654,12 +1655,15 @@ fn Grower::recopy(
       let left = go.unsafe_get(word_byte(cb.unsafe_get(src + column), shift))
       let p = b + (a - b) * left
       let at = p * words
-      for w in 0..<words {
-        tb.unsafe_set(at + w, cb.unsafe_get(src + w))
+      if words == 2 {
+        tb.unsafe_set(at, cb.unsafe_get(src))
+        tb.unsafe_set(at + 1, cb.unsafe_get(src + 1))
+      } else {
+        for w in 0..<words {
+          tb.unsafe_set(at + w, cb.unsafe_get(src + w))
+        }
       }
       q_copy(tq, p, q, r)
-      tg.unsafe_set(p * 2, gh.unsafe_get(r * 2))
-      tg.unsafe_set(p * 2 + 1, gh.unsafe_get(r * 2 + 1))
       to.unsafe_set(p, fo.unsafe_get(r))
       a += left
       b -= 1 - left
@@ -1675,7 +1679,7 @@ fn Grower::recopy(
 /// Whether a node at `depth` and copy level `level` partitions into the
 /// next level's copy.
 fn Grower::copies(self : Grower, depth : Int32, level : Int32) -> Bool {
-  level < self.cgh.length() &&
+  level < self.cq.length() &&
   (self.p.max_depth <= 0 || depth + 1 < self.p.max_depth) &&
   (if level == 0 {
     depth + 1 == self.compact_at[0]
@@ -1718,7 +1722,9 @@ fn Grower::finish_leaf(
 ) -> Unit {
   let mut eg = 0.0
   let mut eh = 0.0
-  let gh = if level > 0 { self.cgh[level - 1] } else { self.gh }
+  // gradients are copied to level 1 only; deeper positions read level
+  // 1's through orig
+  let gh = if level > 0 { self.cgh[0] } else { self.gh }
   let rows = self.rows
   let leaf_at = self.leaf_at
   // indices are in range: rows[lo:hi] are rows or copied positions
@@ -1729,10 +1735,10 @@ fn Grower::finish_leaf(
     // positions of deeper levels map to level 1's in orig[level - 1]
     let o = self.orig[level - 1]
     for i in lo..<hi {
-      let r = rows.unsafe_get(i)
+      let r = o.unsafe_get(rows.unsafe_get(i))
       eg += gh.unsafe_get(r * 2).to_double()
       eh += gh.unsafe_get(r * 2 + 1).to_double()
-      leaf_at.unsafe_set(o.unsafe_get(r), node)
+      leaf_at.unsafe_set(r, node)
     }
   } else if level > 0 {
     for i in lo..<hi {
@@ -3129,7 +3135,7 @@ fn train_json(
     }),
     cbins16: FixedArray::makei(1, fn(_) { u16s_make(copies) }),
     cq: FixedArray::makei(levels, fn(_) { qarr_make(n) }),
-    cgh: FixedArray::makei(levels, fn(_) { f32s_make(n * 2) }),
+    cgh: FixedArray::makei(1, fn(_) { f32s_make(n * 2) }),
     orig: FixedArray::makei(levels, fn(_) { i32s_make(n) }),
     ihs: 1.0,
     rows: i32s_make(n),

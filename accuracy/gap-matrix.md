@@ -39,7 +39,7 @@
 | 梯度采样（GOSS/MVS） | 有 MVS（sampling_method=gradient_based，CPU；同采样率优于均匀采样，0.5 时 4 个数据集 +.003～.0075） | LightGBM GOSS、CatBoost MVS；XGBoost 仅 GPU | ≈（对 XGBoost CPU ✅）；11-20 起未采样行不进直方图，阈值两遍精确解，比旧版快 28% |
 | 高基数类别（>255 类） | 覆盖不足 99% 时保留全部类别（11-19） | XGBoost 全保留 | ≈ |
 | GPU | 无 | XGBoost/CatBoost | ❌（非目标） |
-| 内存占用 | 未测 | | ? |
+| 峰值内存（11-24，bench/peak_memory.py，整进程） | 类别 255/1023/4095 叶 307/337/437 MB；GBM-perf 128 MB | LGB 320/378/621、343（Python 基线 257/227 MB）；XGB 477/625/1113、409 | GBM-perf、4095 叶 ✅；255/1023 叶扣除 Python 基线后 ❌（落后 LGB，6 级复制约 176 MB） |
 
 
 ## 训练速度 airline+类别（单核）

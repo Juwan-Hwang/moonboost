@@ -108,3 +108,11 @@
 - 11-23 MSLR rank:ndcg 255 叶 30 轮（lossguide）复测 recopy：mbgc 13.26–13.49 s vs cbf03b0 12.51–12.65 s（−6%），模型同
 - 11-23 行拷贝 words 循环展开为 copy_row（首两词显式）：airline 类别 1023 叶 6 次 −2%（6/6 更快），GBM-perf depth10 +0.6%（3/3 更慢），模型同 → 否决（净收益不明确）
 - 11-23 注意：ibx 单次 exec 超时会杀掉其中 & 启动的后台任务，长任务须 setsid nohup … < /dev/null &
+- 11-24 recopy 内 words==2 时显式写两词（只改 recopy，不动 partition_copy，故 depthwise 路径不变）：airline 类别 1023 叶 5 次交替 −2.5%（10.66–11.32 → 10.52–10.96 s，5/5 更快；本日机器整体比 11-23 慢约 30%），模型同 → 保留
+- 11-24 recopy 不再复制精确梯度 gh（只复制量化 q、分箱、orig），叶子在 finish_leaf 经 orig 回一级 cgh[0] 读 gh；cgh 只留一级（省 (级数−1)×8n 字节）：在上条基础上 1023 叶 5 次 −4.5%（10.63–11.22 → 10.20–10.44），模型同 → 保留
+- 11-24 峰值 RSS（整进程；Python 库含解释器+pandas+数据）：airline 类别 1023 叶 mb 390 MB / LGB 373 / XGB 637；4095 叶 mb 618 / LGB 633 / XGB 1116；GBM-perf depth10 mb 152 / LGB 398 / XGB 472。Python 进程读完数据即 263–293 MB，扣除解释器开销（约 220–250 MB，数据本身 40 MB 保留）后估计：类别 1023 叶 LGB ≈126 MB < mb 390；GBM-perf mb 152 < LGB ≈179 < XGB ≈253。类别 lossguide 内存落后 LGB（6 级复制约 170 MB）
+- 11-24 复制层两组缓冲交替复用（2、4…级与 3、5…级共用）→ 错误：非复制层分区后节点的位置散布在上次复制祖先的整个区间，lossguide 中滞后的兄弟子树仍持有旧级数据，被覆盖（模型首棵即不同、100 轮崩溃）→ 撤销。任何固定轮换对 lossguide 都不安全
+- 11-24 模型 JSON 改为一次写成 UTF-8 字节（先头部，再树与尾部，同一个 Buffer），train_xgboost_json_bytes 供 CLI 直接写文件；窄分箱打包后释放两字节列存 by_col：CLI 峰值 RSS airline 类别 1023 叶 379→339 MB、4095 叶 618→437 MB，时间略快（10.32→10.14 s、17.27→16.97 s），JS 200k 行 30 轮 2.6–2.7→2.5 s，模型逐字节同（native=JS）→ 合入 5229a44
+- 11-24 CLI 训练前取 rows/cols、train_json 尾部不再引用 data（看 DenseMatrix 能否提前释放）：峰值不变（309/117 MB）→ 撤销
+- 11-24 复制级惰性分配（第 2 级起首次用到才分配）：255/1023 叶峰值不变（308/339 MB）——lossguide 即便 255 叶也会用满 6 级 → 撤销
+- 11-24 峰值内存同会话（bench/peak_memory.py，单进程单线程；Python 进程含解释器+numpy+pandas+库+float32 数据，基线=导入完并读完数据未建 Dataset）：类别 255 叶 mb 307 / LGB 320 / XGB 477（基线 257）；1023 叶 mb 337 / LGB 378 / XGB 625（基线 258）；4095 叶 mb 437 / LGB 621 / XGB 1113（基线 258）；GBM-perf depth10 mb 128 / LGB 343 / XGB 409（基线 227）。按“峰值−基线+40 MB 数据”估：LGB 类别 255/1023/4095 ≈103/160/403 MB、GBM-perf ≈156；XGB ≈260/407/895、≈222。结论：GBM-perf 与 4095 叶 mb 最省；255/1023 叶 mb 比 LGB 多约 2–3×（6 级复制约 176 MB 为主），比 XGB 少

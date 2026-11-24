@@ -149,6 +149,25 @@ three levels, keeping the bins and gradients a deep node reads dense and
 contiguous. With the categories label-encoded
 instead, moonboost reaches 0.7520 at depth 10.
 
+Peak memory (maximum resident set) of the same runs, and of GBM-perf at
+depth 10, one process each (`bench/peak_memory.py`). The Python processes
+include the interpreter, numpy, pandas and the library: such a process with
+the float32 data loaded and nothing trained already holds 257 MB (227 MB
+for GBM-perf's columns). moonboost's CLI holds its float32 data too.
+
+| Run | moonboost CLI | LightGBM 4.7.0 | XGBoost 3.4.1 |
+|---|---|---|---|
+| 255 leaves, categories | 307 MB | 320 MB | 477 MB |
+| 1023 leaves, categories | 337 MB | 378 MB | 625 MB |
+| 4095 leaves, categories | 437 MB | 621 MB | 1113 MB |
+| GBM-perf, depth 10 | 128 MB | 343 MB | 409 MB |
+
+Net of the Python baseline, LightGBM needs less than moonboost at 255 and
+1023 leaves: moonboost's row copies for deep loss-guided trees (six levels
+of one-byte bins, quantised gradients and positions, about 176 MB here)
+trade memory for the speed above. At 4095 leaves and at depth 10 moonboost
+needs the least.
+
 ### Sampling and other objectives
 
 `subsample` trains each tree on a share of the rows, drawn anew per tree

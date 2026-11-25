@@ -72,6 +72,47 @@ test "one-byte and two-byte copied bins train the same model" {
 }
 
 ///|
+test "pairs packed in the bin words train the same model" {
+  // more than 65536 rows, 9 and 12 features and loss-guided trees deep
+  // enough for several copy levels: the copies carry the quantised pairs
+  // in their bin words, against the two-byte path without them
+  let rows = 70000
+  for cols in [9, 12] {
+    let data = Array::make(rows * cols, (0.0 : Float))
+    let label = Array::make(rows, (0.0 : Float))
+    let mut seed = 777
+    for r in 0..<rows {
+      for f in 0..<cols {
+        seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
+        let v = (seed % 1000).to_double() / 10.0
+        data[r * cols + f] = if f == 2 && seed % 7 == 0 {
+          Float::from_double(0.0 / 0.0)
+        } else {
+          Float::from_double(v)
+        }
+      }
+      seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
+      let x = data[r * cols].to_double() +
+        data[r * cols + 1].to_double() * data[r * cols + 3].to_double() / 50.0 +
+        data[r * cols + cols - 1].to_double() * 0.5 +
+        (seed % 100).to_double()
+      label[r] = if x > 175.0 { 1.0 } else { 0.0 }
+    }
+    let m = DenseMatrix::new(data, cols~)
+    let p = {
+      ..TrainParams::default(),
+      objective: "binary:logistic",
+      grow_policy: "lossguide",
+      max_depth: 0,
+      max_leaves: 255,
+      num_round: 2,
+      max_bin: 64,
+    }
+    assert_eq(train_json(m, label, p, true), train_json(m, label, p, false))
+  }
+}
+
+///|
 test "quantile by selection matches quantile of the sorted values" {
   let mut s = 7
   for n in [1, 2, 3, 5, 17, 100, 1000, 4097] {

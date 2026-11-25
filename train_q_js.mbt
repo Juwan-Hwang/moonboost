@@ -315,3 +315,18 @@ fn Grower::histogram(
   }
   hist
 }
+
+///|
+/// Copy levels never carry the quantised pairs in their bin words here.
+fn qpad_ok(cols : Int32, words : Int32, n : Int32) -> Bool {
+  ignore(cols)
+  ignore(words)
+  ignore(n)
+  false
+}
+
+///|
+fn q_pad(w : Int32, q : Double) -> Int32 {
+  ignore(q)
+  w
+}

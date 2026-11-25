@@ -63,6 +63,31 @@ fn word_put(x : UInt64, b : Byte, shift : Int32) -> UInt64 {
 }
 
 ///|
+/// Whether copy levels can carry each row's quantised pair in the free
+/// high half of its second bin word (9 to 12 features): per-row values
+/// then fit 16 bits each (|g| and h are at most 2^31 / n, n > 65536), so
+/// the pair packs into 32 bits and rides with the bins.
+fn qpad_ok(cols : Int32, words : Int32, n : Int32) -> Bool {
+  words == 2 && cols % 8 >= 1 && cols % 8 <= 4 && n > 65536
+}
+
+///|
+/// Word w (its high half zero) with the pair (g << 32) + h packed into
+/// that half as (g << 16) | h.
+fn q_pad(w : UInt64, q : Int64) -> UInt64 {
+  let g = (q >> 32).to_int()
+  let h = (q & 0xFFFFL).to_int()
+  w | (((g << 16) | h).reinterpret_as_uint().to_uint64() << 32)
+}
+
+///|
+/// The pair (g << 32) + h packed in the high half of w by q_pad.
+fn q_unpad(w : UInt64) -> Int64 {
+  let x = (w >> 32).to_int()
+  ((x >> 16).to_int64() << 32) + (x & 0xFFFF).to_int64()
+}
+
+///|
 fn qarr_make(n : Int32) -> QArr {
   FixedArray::make(n, 0L)
 }
@@ -202,6 +227,16 @@ fn Grower::histogram(
       return hist
     }
     let tail = self.data.cols - 8
+    if self.qpad && level > 0 {
+      // the pair is in the second word's high half (tail 1 to 4)
+      match tail {
+        1 => histq_two_1(hist, rows, cb, wb, lo, hi)
+        2 => histq_two_2(hist, rows, cb, wb, lo, hi)
+        3 => histq_two_3(hist, rows, cb, wb, lo, hi)
+        _ => histq_two_4(hist, rows, cb, wb, lo, hi)
+      }
+      return hist
+    }
     if words == 2 && tail < 8 {
       // nine to fifteen features: the padding bytes of the second word
       // are skipped, as their slots would chain every row's updates
@@ -725,5 +760,203 @@ fn hist_two_7(
     hist.unsafe_set(s12, hist.unsafe_get(s12) + q)
     hist.unsafe_set(s13, hist.unsafe_get(s13) + q)
     hist.unsafe_set(s14, hist.unsafe_get(s14) + q)
+  }
+}
+
+///|
+/// histogram, pairs packed in the second word, for 8 + 1 features (two words, 7 padding bytes skipped).
+fn histq_two_1(
+  hist : Hist,
+  rows : I32s,
+  cb : Words,
+  wb : FixedArray[Int32],
+  lo : Int32,
+  hi : Int32,
+) -> Unit {
+  let b0 = wb[0]
+  let b1 = wb[1]
+  let b2 = wb[2]
+  let b3 = wb[3]
+  let b4 = wb[4]
+  let b5 = wb[5]
+  let b6 = wb[6]
+  let b7 = wb[7]
+  let b8 = wb[8]
+  for i in lo..<hi {
+    let r = rows.unsafe_get(i)
+    let x = cb.unsafe_get(r * 2)
+    let y = cb.unsafe_get(r * 2 + 1)
+    let q = q_unpad(y)
+    let s0 = (x & 255UL).to_int() + b0
+    let s1 = ((x >> 8) & 255UL).to_int() + b1
+    let s2 = ((x >> 16) & 255UL).to_int() + b2
+    let s3 = ((x >> 24) & 255UL).to_int() + b3
+    let s4 = ((x >> 32) & 255UL).to_int() + b4
+    let s5 = ((x >> 40) & 255UL).to_int() + b5
+    let s6 = ((x >> 48) & 255UL).to_int() + b6
+    let s7 = (x >> 56).to_int() + b7
+    let s8 = (y & 255UL).to_int() + b8
+    hist.unsafe_set(s0, hist.unsafe_get(s0) + q)
+    hist.unsafe_set(s1, hist.unsafe_get(s1) + q)
+    hist.unsafe_set(s2, hist.unsafe_get(s2) + q)
+    hist.unsafe_set(s3, hist.unsafe_get(s3) + q)
+    hist.unsafe_set(s4, hist.unsafe_get(s4) + q)
+    hist.unsafe_set(s5, hist.unsafe_get(s5) + q)
+    hist.unsafe_set(s6, hist.unsafe_get(s6) + q)
+    hist.unsafe_set(s7, hist.unsafe_get(s7) + q)
+    hist.unsafe_set(s8, hist.unsafe_get(s8) + q)
+  }
+}
+
+///|
+/// histogram, pairs packed in the second word, for 8 + 2 features (two words, 6 padding bytes skipped).
+fn histq_two_2(
+  hist : Hist,
+  rows : I32s,
+  cb : Words,
+  wb : FixedArray[Int32],
+  lo : Int32,
+  hi : Int32,
+) -> Unit {
+  let b0 = wb[0]
+  let b1 = wb[1]
+  let b2 = wb[2]
+  let b3 = wb[3]
+  let b4 = wb[4]
+  let b5 = wb[5]
+  let b6 = wb[6]
+  let b7 = wb[7]
+  let b8 = wb[8]
+  let b9 = wb[9]
+  for i in lo..<hi {
+    let r = rows.unsafe_get(i)
+    let x = cb.unsafe_get(r * 2)
+    let y = cb.unsafe_get(r * 2 + 1)
+    let q = q_unpad(y)
+    let s0 = (x & 255UL).to_int() + b0
+    let s1 = ((x >> 8) & 255UL).to_int() + b1
+    let s2 = ((x >> 16) & 255UL).to_int() + b2
+    let s3 = ((x >> 24) & 255UL).to_int() + b3
+    let s4 = ((x >> 32) & 255UL).to_int() + b4
+    let s5 = ((x >> 40) & 255UL).to_int() + b5
+    let s6 = ((x >> 48) & 255UL).to_int() + b6
+    let s7 = (x >> 56).to_int() + b7
+    let s8 = (y & 255UL).to_int() + b8
+    let s9 = ((y >> 8) & 255UL).to_int() + b9
+    hist.unsafe_set(s0, hist.unsafe_get(s0) + q)
+    hist.unsafe_set(s1, hist.unsafe_get(s1) + q)
+    hist.unsafe_set(s2, hist.unsafe_get(s2) + q)
+    hist.unsafe_set(s3, hist.unsafe_get(s3) + q)
+    hist.unsafe_set(s4, hist.unsafe_get(s4) + q)
+    hist.unsafe_set(s5, hist.unsafe_get(s5) + q)
+    hist.unsafe_set(s6, hist.unsafe_get(s6) + q)
+    hist.unsafe_set(s7, hist.unsafe_get(s7) + q)
+    hist.unsafe_set(s8, hist.unsafe_get(s8) + q)
+    hist.unsafe_set(s9, hist.unsafe_get(s9) + q)
+  }
+}
+
+///|
+/// histogram, pairs packed in the second word, for 8 + 3 features (two words, 5 padding bytes skipped).
+fn histq_two_3(
+  hist : Hist,
+  rows : I32s,
+  cb : Words,
+  wb : FixedArray[Int32],
+  lo : Int32,
+  hi : Int32,
+) -> Unit {
+  let b0 = wb[0]
+  let b1 = wb[1]
+  let b2 = wb[2]
+  let b3 = wb[3]
+  let b4 = wb[4]
+  let b5 = wb[5]
+  let b6 = wb[6]
+  let b7 = wb[7]
+  let b8 = wb[8]
+  let b9 = wb[9]
+  let b10 = wb[10]
+  for i in lo..<hi {
+    let r = rows.unsafe_get(i)
+    let x = cb.unsafe_get(r * 2)
+    let y = cb.unsafe_get(r * 2 + 1)
+    let q = q_unpad(y)
+    let s0 = (x & 255UL).to_int() + b0
+    let s1 = ((x >> 8) & 255UL).to_int() + b1
+    let s2 = ((x >> 16) & 255UL).to_int() + b2
+    let s3 = ((x >> 24) & 255UL).to_int() + b3
+    let s4 = ((x >> 32) & 255UL).to_int() + b4
+    let s5 = ((x >> 40) & 255UL).to_int() + b5
+    let s6 = ((x >> 48) & 255UL).to_int() + b6
+    let s7 = (x >> 56).to_int() + b7
+    let s8 = (y & 255UL).to_int() + b8
+    let s9 = ((y >> 8) & 255UL).to_int() + b9
+    let s10 = ((y >> 16) & 255UL).to_int() + b10
+    hist.unsafe_set(s0, hist.unsafe_get(s0) + q)
+    hist.unsafe_set(s1, hist.unsafe_get(s1) + q)
+    hist.unsafe_set(s2, hist.unsafe_get(s2) + q)
+    hist.unsafe_set(s3, hist.unsafe_get(s3) + q)
+    hist.unsafe_set(s4, hist.unsafe_get(s4) + q)
+    hist.unsafe_set(s5, hist.unsafe_get(s5) + q)
+    hist.unsafe_set(s6, hist.unsafe_get(s6) + q)
+    hist.unsafe_set(s7, hist.unsafe_get(s7) + q)
+    hist.unsafe_set(s8, hist.unsafe_get(s8) + q)
+    hist.unsafe_set(s9, hist.unsafe_get(s9) + q)
+    hist.unsafe_set(s10, hist.unsafe_get(s10) + q)
+  }
+}
+
+///|
+/// histogram, pairs packed in the second word, for 8 + 4 features (two words, 4 padding bytes skipped).
+fn histq_two_4(
+  hist : Hist,
+  rows : I32s,
+  cb : Words,
+  wb : FixedArray[Int32],
+  lo : Int32,
+  hi : Int32,
+) -> Unit {
+  let b0 = wb[0]
+  let b1 = wb[1]
+  let b2 = wb[2]
+  let b3 = wb[3]
+  let b4 = wb[4]
+  let b5 = wb[5]
+  let b6 = wb[6]
+  let b7 = wb[7]
+  let b8 = wb[8]
+  let b9 = wb[9]
+  let b10 = wb[10]
+  let b11 = wb[11]
+  for i in lo..<hi {
+    let r = rows.unsafe_get(i)
+    let x = cb.unsafe_get(r * 2)
+    let y = cb.unsafe_get(r * 2 + 1)
+    let q = q_unpad(y)
+    let s0 = (x & 255UL).to_int() + b0
+    let s1 = ((x >> 8) & 255UL).to_int() + b1
+    let s2 = ((x >> 16) & 255UL).to_int() + b2
+    let s3 = ((x >> 24) & 255UL).to_int() + b3
+    let s4 = ((x >> 32) & 255UL).to_int() + b4
+    let s5 = ((x >> 40) & 255UL).to_int() + b5
+    let s6 = ((x >> 48) & 255UL).to_int() + b6
+    let s7 = (x >> 56).to_int() + b7
+    let s8 = (y & 255UL).to_int() + b8
+    let s9 = ((y >> 8) & 255UL).to_int() + b9
+    let s10 = ((y >> 16) & 255UL).to_int() + b10
+    let s11 = ((y >> 24) & 255UL).to_int() + b11
+    hist.unsafe_set(s0, hist.unsafe_get(s0) + q)
+    hist.unsafe_set(s1, hist.unsafe_get(s1) + q)
+    hist.unsafe_set(s2, hist.unsafe_get(s2) + q)
+    hist.unsafe_set(s3, hist.unsafe_get(s3) + q)
+    hist.unsafe_set(s4, hist.unsafe_get(s4) + q)
+    hist.unsafe_set(s5, hist.unsafe_get(s5) + q)
+    hist.unsafe_set(s6, hist.unsafe_get(s6) + q)
+    hist.unsafe_set(s7, hist.unsafe_get(s7) + q)
+    hist.unsafe_set(s8, hist.unsafe_get(s8) + q)
+    hist.unsafe_set(s9, hist.unsafe_get(s9) + q)
+    hist.unsafe_set(s10, hist.unsafe_get(s10) + q)
+    hist.unsafe_set(s11, hist.unsafe_get(s11) + q)
   }
 }

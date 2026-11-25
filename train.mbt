@@ -704,6 +704,9 @@ priv struct Grower {
   // copied bins take one byte, slot - cbase[feature], when every feature's
   // slots in use span at most 256 (narrow); otherwise two, the slot itself
   narrow : Bool
+  // copy levels carry each row's quantised pair in its bin words (cq
+  // unused): loss-guided, one-byte bins, see qpad_ok
+  qpad : Bool
   // when narrow, the original bins in the same one-byte form, word_bins
   // to a word: feature f of row r is byte f % word_bins of
   // bins8[r * words + f / word_bins], so
@@ -1544,6 +1547,27 @@ fn Grower::partition_copy(
     let words = self.words
     let column = s.feature * n
     let go = self.left_table(s)
+    if self.qpad {
+      // words == 2; the pair goes into the second word's high half
+      for i in lo..<hi {
+        let r = rows.unsafe_get(i)
+        let left = go.unsafe_get(by8.unsafe_get(r + column).to_int())
+        let p = b + (a - b) * left
+        let src = r << 1
+        let at = p << 1
+        tb.unsafe_set(at, b8.unsafe_get(src))
+        tb.unsafe_set(at + 1, q_pad(b8.unsafe_get(src + 1), q.unsafe_get(r)))
+        tg.unsafe_set(p * 2, gh.unsafe_get(r * 2))
+        tg.unsafe_set(p * 2 + 1, gh.unsafe_get(r * 2 + 1))
+        to.unsafe_set(p, r)
+        a += left
+        b -= 1 - left
+      }
+      for i in lo..<hi {
+        dst.unsafe_set(i, i)
+      }
+      return a
+    }
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
       let left = go.unsafe_get(by8.unsafe_get(r + column).to_int())
@@ -1628,7 +1652,69 @@ fn Grower::recopy(
   let mut a = lo
   let mut b = hi - 1
   // orig[level] holds level-1 positions: level 1's own, or mapped down
-  if level == 1 {
+  if self.qpad {
+    // words == 2, the pairs ride in the bin words
+    if level == 1 {
+      for i in lo..<hi {
+        let r = rows.unsafe_get(i)
+        let src = r << 1
+        let left = go.unsafe_get(word_byte(cb.unsafe_get(src + column), shift))
+        let p = b + (a - b) * left
+        let at = p << 1
+        tb.unsafe_set(at, cb.unsafe_get(src))
+        tb.unsafe_set(at + 1, cb.unsafe_get(src + 1))
+        to.unsafe_set(p, r)
+        a += left
+        b -= 1 - left
+      }
+    } else {
+      let fo = self.orig[level - 1]
+      for i in lo..<hi {
+        let r = rows.unsafe_get(i)
+        let src = r << 1
+        let left = go.unsafe_get(word_byte(cb.unsafe_get(src + column), shift))
+        let p = b + (a - b) * left
+        let at = p << 1
+        tb.unsafe_set(at, cb.unsafe_get(src))
+        tb.unsafe_set(at + 1, cb.unsafe_get(src + 1))
+        to.unsafe_set(p, fo.unsafe_get(r))
+        a += left
+        b -= 1 - left
+      }
+    }
+  } else if words == 2 {
+    // the common case (up to 16 features), with fewer live values
+    if level == 1 {
+      for i in lo..<hi {
+        let r = rows.unsafe_get(i)
+        let src = r << 1
+        let left = go.unsafe_get(word_byte(cb.unsafe_get(src + column), shift))
+        let p = b + (a - b) * left
+        let at = p << 1
+        tb.unsafe_set(at, cb.unsafe_get(src))
+        tb.unsafe_set(at + 1, cb.unsafe_get(src + 1))
+        q_copy(tq, p, q, r)
+        to.unsafe_set(p, r)
+        a += left
+        b -= 1 - left
+      }
+    } else {
+      let fo = self.orig[level - 1]
+      for i in lo..<hi {
+        let r = rows.unsafe_get(i)
+        let src = r << 1
+        let left = go.unsafe_get(word_byte(cb.unsafe_get(src + column), shift))
+        let p = b + (a - b) * left
+        let at = p << 1
+        tb.unsafe_set(at, cb.unsafe_get(src))
+        tb.unsafe_set(at + 1, cb.unsafe_get(src + 1))
+        q_copy(tq, p, q, r)
+        to.unsafe_set(p, fo.unsafe_get(r))
+        a += left
+        b -= 1 - left
+      }
+    }
+  } else if level == 1 {
     for i in lo..<hi {
       let r = rows.unsafe_get(i)
       let src = r * words
@@ -3135,6 +3221,7 @@ fn train_json(
     .filter(fn(d) { p.max_depth <= 0 || d < p.max_depth })
     .count()
   let levels = if levels < 1 { 1 } else { levels }
+  let qpad = narrow && compact_at.length() > 1 && qpad_ok(cols, words, n)
   let gr : Grower = {
     data: binned,
     p,
@@ -3145,6 +3232,7 @@ fn train_json(
     igs: 1.0,
     compact_at,
     narrow,
+    qpad,
     bins8,
     words,
     by8,
@@ -3158,7 +3246,7 @@ fn train_json(
       }
     }),
     cbins16: FixedArray::makei(1, fn(_) { u16s_make(copies) }),
-    cq: FixedArray::makei(levels, fn(_) { qarr_make(n) }),
+    cq: FixedArray::makei(levels, fn(_) { qarr_make(if qpad { 0 } else { n }) }),
     cgh: FixedArray::makei(1, fn(_) { f32s_make(n * 2) }),
     orig: FixedArray::makei(levels, fn(_) { i32s_make(n) }),
     ihs: 1.0,

@@ -8,7 +8,9 @@ moonboost loads models trained by [XGBoost](https://github.com/dmlc/xgboost)
 or [LightGBM](https://github.com/microsoft/LightGBM) and reproduces their
 predictions **bit for bit**, from one codebase that runs
 on the `native`, `wasm`, `wasm-gc` and `js` backends. No Python, no C++
-runtime, no ONNX conversion step.
+runtime, no ONNX conversion step. It also trains: histogram trees for all
+19 of XGBoost's objectives, written as XGBoost JSON that XGBoost loads and
+predicts bit for bit.
 
 **[Try it in your browser](https://juwan-hwang.github.io/moonboost/)**: a
 200-tree XGBoost model scoring California housing blocks in the page, a
@@ -42,7 +44,8 @@ trust because it is tested against XGBoost itself.
 | ES module for browsers and Node (`web/`) | done |
 | Browser demo (`docs/`, GitHub Pages) | done |
 | XGBoost UBJSON models (`.ubj`) | done |
-| Training: histogram trees for `reg:squarederror`, `reg:pseudohubererror`, `reg:squaredlogerror`, `binary:logistic`, `reg:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `survival:cox`, `survival:aft`, `multi:softprob`, `multi:softmax`, written as XGBoost JSON | done |
+| Training: histogram trees for `reg:squarederror`, `reg:squaredlogerror`, `reg:pseudohubererror`, `reg:absoluteerror`, `reg:quantileerror` (one or several quantiles), `reg:logistic`, `binary:logistic`, `binary:logitraw`, `binary:hinge`, `count:poisson`, `reg:gamma`, `reg:tweedie`, `survival:cox`, `survival:aft`, `multi:softprob`, `multi:softmax`, `rank:ndcg`, `rank:pairwise`, `rank:map`, written as XGBoost JSON | done |
+| Training: several outputs (one tree per output, or vector leaves with `multi_strategy: "multi_output_tree"`) | done |
 | Training: row and feature sampling (`subsample` with `uniform` or `gradient_based` rows, `colsample_bytree`, `colsample_bynode`), `min_data_in_leaf` | done |
 | Training: categorical features (one category against the rest, or a set of categories) | done |
 | Training: loss-guided growth (`grow_policy: "lossguide"`, `max_leaves`) | done |
@@ -827,6 +830,9 @@ moon run cmd/main --target native -- train rows.csv labels.csv -o model.json --o
 ```
 
 `--margin` prints raw scores and `--leaf` prints the leaf reached in each tree.
+`train` takes the training parameters as flags (`--grow-policy`,
+`--max-leaves`, `--categorical`, `--subsample`, `--group`, `--quantile-alpha`
+and the rest; `--help` lists them) or as XGBoost-style JSON with `--params`.
 LightGBM text models work the same way; the CLI tells the formats apart by
 content. XGBoost UBJSON models are read when the file name ends in `.ubj`.
 The release binaries (`moonboost-linux-x86_64`, `moonboost-linux-arm64`) take
@@ -847,8 +853,9 @@ python3 tools/gen_demo.py && sh tools/build_demo.sh   # rebuild the browser demo
 ## License and attribution
 
 Apache-2.0. moonboost reads the XGBoost JSON and LightGBM text model formats
-and follows their prediction semantics; no XGBoost or LightGBM source code is
-included. XGBoost is Apache-2.0, © the XGBoost contributors. LightGBM is MIT,
+and follows their prediction semantics; training follows XGBoost's
+objectives and model format, and LightGBM's descriptions of categorical and
+loss-guided splitting. No XGBoost or LightGBM source code is included. XGBoost is Apache-2.0, © the XGBoost contributors. LightGBM is MIT,
 © Microsoft Corporation and the LightGBM developers. `lgb_exp.mbt` ports
 the double-precision `exp` of Arm's optimized-routines (as used by glibc),
 MIT OR Apache-2.0 WITH LLVM-exception, © Arm Limited; its table and

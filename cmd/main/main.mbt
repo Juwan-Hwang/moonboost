@@ -39,7 +39,7 @@ const USAGE : String =
   #|  --grow-policy depthwise | lossguide  --max-leaves 0
   #|  --subsample 1  --sampling-method uniform|gradient_based
   #|  --colsample-bytree 1  --colsample-bynode 1  --seed 0
-  #|  --min-data-in-leaf 0
+  #|  --min-data-in-leaf 0  --cat-smooth 10  --min-data-per-group 100
   #|  --params params.json  (XGBoost parameter names as a JSON object; later
   #|    options override it)
   #|labels.csv holds one label per line, or several comma-separated for a

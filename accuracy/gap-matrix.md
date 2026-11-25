@@ -32,14 +32,14 @@
 | 形式化验证 | 有（moon prove 内核） | 无 | ✅ |
 | 包体积 JS | 270 KB / 77 KB gz | ort-web 14.8 MB wasm | ✅ |
 | 类别特征训练 | 有（one-vs-rest + 排序划分，XGBoost 格式） | LightGBM/XGBoost/CatBoost | ✅（airline 同叶数更准） |
-| 按叶生长 | 有（lossguide，叶堆） | LightGBM | ≈/✅（11-21 核 2 同会话，带类别：255 叶 6.4 vs 6.5 s；1023 叶 8.8 vs 9.2 s；AUC 均更高；4095 见 log） |
+| 按叶生长 | 有（lossguide，叶堆） | LightGBM | ✅（11-25 同会话核 3，带类别：255/1023/4095 叶 6.7/9.4/15.1 s vs LGB 8.5/12.5/25.6、XGB 30.7/49.1/71.5；AUC 均最高） |
 | 训练目标函数种类 | 19 种（已覆盖 XGBoost 全部 19 个 objective）（11-23 rank:map 对 XGB MAP +0.0024 显著、survival:aft 1.4–2.4× 快；11-21 加 absoluteerror、quantileerror；11-21 rank:ndcg/pairwise；11-22 binary:hinge、survival:cox，速度快于 XGBoost、精度持平；分位数叶；XGBoost 加载逐位一致；10 万行 4 种子：三项均优于 XGBoost 约 0.5%，比 LightGBM 差 0.04–0.13%（约 1 se）） | reg:logistic 以外的 multi:… 等 | ❌（缩小） |
 | 行/列采样（subsample、colsample_bytree/bynode） | 有；11-20 起只在保留行上建树。airline 带类别 sub 0.5：255 叶 4.0 s vs LGB 11.3 / XGB 22.2，1023 叶 6.1 vs 14.3 / 33.6，AUC 均最高 | XGBoost/LightGBM | 采样训练速度 ✅（单线程）；功能 ≈ |
 | min_data_in_leaf（按 hessian 估计行数，同 LightGBM） | 有（11-19 加） | LightGBM；XGBoost 无 | ≈ |
 | 梯度采样（GOSS/MVS） | 有 MVS（sampling_method=gradient_based，CPU；同采样率优于均匀采样，0.5 时 4 个数据集 +.003～.0075） | LightGBM GOSS、CatBoost MVS；XGBoost 仅 GPU | ≈（对 XGBoost CPU ✅）；11-20 起未采样行不进直方图，阈值两遍精确解，比旧版快 28% |
 | 高基数类别（>255 类） | 覆盖不足 99% 时保留全部类别（11-19） | XGBoost 全保留 | ≈ |
 | GPU | 无 | XGBoost/CatBoost | ❌（非目标） |
-| 峰值内存（11-24，bench/peak_memory.py，整进程） | 类别 255/1023/4095 叶 307/337/437 MB；GBM-perf 128 MB | LGB 320/378/621、343（Python 基线 257/227 MB）；XGB 477/625/1113、409 | GBM-perf、4095 叶 ✅；255/1023 叶扣除 Python 基线后 ❌（落后 LGB，6 级复制约 176 MB） |
+| 峰值内存（11-25，bench/peak_memory.py，整进程） | 类别 255/1023/4095 叶 273/306/405 MB；GBM-perf 128 MB | LGB 320/378/621、343（Python 基线 257/227 MB）；XGB 477/637/1075、409 | GBM-perf、4095 叶 ✅；255/1023 叶扣除 Python 基线后仍 ❌（落后 LGB，6 级复制约 120 MB；量化对已并入分箱词） |
 
 
 ## 训练速度 airline+类别（单核）

@@ -172,8 +172,30 @@ fn train_exp(x : Double) -> Double {
 }
 
 ///|
-/// Gradient and hessian sums per bin for rows[lo:hi], for a node at
-/// `depth` (unused here: each histogram is a fresh allocation).
+/// Histogram buffers by slot (a depth, or a loss-guided slot + 1), reused
+/// across nodes and trees: a slot's buffer is free whenever a new
+/// histogram is built for it.
+let hist_pool : Array[Hist] = []
+
+///|
+/// The zeroed buffer of slot `slot`, of `len` slots.
+fn pooled_hist(slot : Int32, len : Int32) -> Hist {
+  while hist_pool.length() <= slot {
+    hist_pool.push(FixedArray::make(len, 0L))
+  }
+  let h = hist_pool[slot]
+  if h.length() != len {
+    let fresh = FixedArray::make(len, 0L)
+    hist_pool[slot] = fresh
+    return fresh
+  }
+  h.fill(0L)
+  h
+}
+
+///|
+/// Gradient and hessian sums per bin for rows[lo:hi], into the buffer of
+/// slot `depth`.
 fn Grower::histogram(
   self : Grower,
   lo : Int32,
@@ -181,10 +203,9 @@ fn Grower::histogram(
   level : Int32,
   depth : Int32,
 ) -> Hist {
-  ignore(depth)
   let rows = self.rows
   if self.narrow {
-    let hist = FixedArray::make(self.nbins + 8, 0L)
+    let hist = pooled_hist(depth, self.nbins + 8)
     let (cb, cq) = if level > 0 {
       (self.cbins[level - 1], self.cq[level - 1])
     } else {
@@ -347,7 +368,7 @@ fn Grower::histogram(
     }
     return hist
   }
-  let hist = FixedArray::make(self.nbins, 0L)
+  let hist = pooled_hist(depth, self.nbins)
   let cols = self.data.cols
   let bins = if level > 0 { self.cbins16[level - 1] } else { self.data.bins }
   let gq = if level > 0 { self.cq[level - 1] } else { self.gq }

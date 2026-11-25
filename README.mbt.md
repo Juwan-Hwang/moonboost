@@ -137,16 +137,19 @@ thread on one core of the VM above (`bench/airline_categorical.py`):
 
 | Leaves | moonboost | LightGBM 4.7.0 | XGBoost 3.4.1 `hist` |
 |---|---|---|---|
-| 255 | 6.0 s, AUC 0.7629 | 6.5 s, AUC 0.7612 | 21.2 s, AUC 0.7547 |
-| 1023 | 8.0 s, AUC 0.7779 | 9.4 s, AUC 0.7761 | 34.3 s, AUC 0.7638 |
-| 4095 | 13.1 s, AUC 0.7868 | 19.9 s, AUC 0.7829 | 58.7 s, AUC 0.7655 |
+| 255 | 6.7 s, AUC 0.7629 | 8.5 s, AUC 0.7612 | 30.7 s, AUC 0.7547 |
+| 1023 | 9.4 s, AUC 0.7779 | 12.5 s, AUC 0.7761 | 49.1 s, AUC 0.7638 |
+| 4095 | 15.1 s, AUC 0.7868 | 25.6 s, AUC 0.7829 | 71.5 s, AUC 0.7655 |
 
 At every size moonboost's model is the most accurate, and it trains fastest:
-34% less time than LightGBM at 4095 leaves, 15% less at 1023 and 8% less
-at 255. Loss-guided trees grow deep along their largest nodes, so below the
+41% less time than LightGBM at 4095 leaves, 25% less at 1023 and 21% less
+at 255 (one session; this VM ran slower that day than for the tables
+above, so compare within the table). Loss-guided trees grow deep along their largest nodes, so below the
 first copy of a subtree's rows moonboost copies a node's rows again every
 three levels, keeping the bins and gradients a deep node reads dense and
-contiguous. With the categories label-encoded
+contiguous. With 9 to 12 features and more than 65536 rows, each row's
+quantised gradient pair (16 bits each at that size) rides in the spare half
+of its second bin word, so a copy is one stream of 16 bytes a row. With the categories label-encoded
 instead, moonboost reaches 0.7520 at depth 10.
 
 Peak memory (maximum resident set) of the same runs, and of GBM-perf at
@@ -157,16 +160,16 @@ for GBM-perf's columns). moonboost's CLI holds its float32 data too.
 
 | Run | moonboost CLI | LightGBM 4.7.0 | XGBoost 3.4.1 |
 |---|---|---|---|
-| 255 leaves, categories | 307 MB | 320 MB | 477 MB |
-| 1023 leaves, categories | 337 MB | 378 MB | 625 MB |
-| 4095 leaves, categories | 437 MB | 621 MB | 1113 MB |
+| 255 leaves, categories | 273 MB | 320 MB | 477 MB |
+| 1023 leaves, categories | 306 MB | 378 MB | 637 MB |
+| 4095 leaves, categories | 405 MB | 621 MB | 1075 MB |
 | GBM-perf, depth 10 | 128 MB | 343 MB | 409 MB |
 
-Net of the Python baseline, LightGBM needs less than moonboost at 255 and
-1023 leaves: moonboost's row copies for deep loss-guided trees (six levels
-of one-byte bins, quantised gradients and positions, about 176 MB here)
-trade memory for the speed above. At 4095 leaves and at depth 10 moonboost
-needs the least.
+Net of the Python baseline, LightGBM still needs less than moonboost at 255
+and 1023 leaves: moonboost's row copies for deep loss-guided trees (six
+levels of one-byte bins with the gradient pairs, and positions, about 120
+MB here) trade memory for the speed above. At 4095 leaves and at depth 10
+moonboost needs the least.
 
 ### Sampling and other objectives
 

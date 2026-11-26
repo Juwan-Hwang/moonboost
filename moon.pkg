@@ -1,7 +1,7 @@
 import {
   "Juwan-Hwang/moonboost/kernel",
   "moonbitlang/core/math",
-  "moonbitlang/core/v128",
+  "moonbitlang/core/simd",
   "moonbitlang/core/debug",
   "moonbitlang/core/json",
   "moonbitlang/core/string",
@@ -16,6 +16,7 @@ import {
 warnings = "-unused_package"
 
 options(
+  "allow-experimental-packages": [ "moonbitlang/core/simd" ],
   "alert-list": "-experimental",
   targets: {
     "lockstep_nodes_int64.mbt": [ "not", "js", "wasm", "wasm-gc" ],

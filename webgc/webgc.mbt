@@ -20,6 +20,7 @@ let error : Ref[String] = Ref("")
 
 ///|
 /// Makes room for `rows` rows of `cols` values.
+#export_name("train_alloc")
 pub fn train_alloc(rows : Int32, cols : Int32) -> Unit {
   data.val = FixedArray::make(rows * cols, 0.0)
   labels.val = FixedArray::make(rows, 0.0)
@@ -28,12 +29,14 @@ pub fn train_alloc(rows : Int32, cols : Int32) -> Unit {
 
 ///|
 /// Sets value `i` of the row-major data (`NaN` for missing).
+#export_name("train_set")
 pub fn train_set(i : Int32, v : Double) -> Unit {
   data.val[i] = Float::from_double(v)
 }
 
 ///|
 /// Sets the label of row `i`.
+#export_name("train_label")
 pub fn train_label(i : Int32, v : Double) -> Unit {
   labels.val[i] = Float::from_double(v)
 }
@@ -44,6 +47,7 @@ pub fn train_label(i : Int32, v : Double) -> Unit {
 /// 3 `multi:softmax`; a negative setting keeps XGBoost's default. Returns
 /// the length of the model's XGBoost JSON text, or -1 with the message's
 /// length available through `train_error_char(-1)`.
+#export_name("train_run")
 pub fn train_run(
   objective : Int32,
   num_class : Int32,
@@ -87,12 +91,14 @@ pub fn train_run(
 
 ///|
 /// Code unit `i` of the trained model's text.
+#export_name("train_char")
 pub fn train_char(i : Int32) -> Int32 {
   text.val.code_unit_at(i).to_int()
 }
 
 ///|
 /// Code unit `i` of the last error message, or its length for `i = -1`.
+#export_name("train_error_char")
 pub fn train_error_char(i : Int32) -> Int32 {
   if i < 0 {
     error.val.length()
@@ -107,12 +113,14 @@ let param_text : Ref[FixedArray[Int32]] = Ref(FixedArray::make(0, 0))
 ///|
 /// Makes room for training parameters given as `n` UTF-16 code units of
 /// JSON (XGBoost's names, as for `train_with` in the ES module).
+#export_name("train_params_alloc")
 pub fn train_params_alloc(n : Int32) -> Unit {
   param_text.val = FixedArray::make(n, 0)
 }
 
 ///|
 /// Sets code unit `i` of the parameters' JSON text.
+#export_name("train_params_char")
 pub fn train_params_char(i : Int32, c : Int32) -> Unit {
   param_text.val[i] = c
 }
@@ -120,6 +128,7 @@ pub fn train_params_char(i : Int32, c : Int32) -> Unit {
 ///|
 /// Trains on the rows set so far with the parameters' JSON text; returns
 /// as `train_run` does.
+#export_name("train_run_params")
 pub fn train_run_params() -> Int32 {
   let units = param_text.val
   let buf = StringBuilder(capacity=units.length())

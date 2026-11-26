@@ -108,7 +108,7 @@ setup), two runs each (JS once):
 moonboost native takes under half the time of XGBoost and about 40% less
 than LightGBM here (`bench/gbmperf_compare.py`; all in the same session).
 On native, wasm and wasm-gc the logistic and softmax gradients run two rows
-at a time in 128-bit SIMD lanes (`moonbitlang/core/v128`), with the same
+at a time in 128-bit SIMD lanes (`moonbitlang/core/simd`), with the same
 operations in the same order as the scalar code, so every build still makes
 the same model bit for bit. moonboost's times leave out reading the CSV.
 
@@ -713,7 +713,7 @@ booster):
 
 ## Usage
 
-Add the package:
+Add the package (MoonBit 1.0 or later; for older toolchains use 0.2.0):
 
 ```
 moon add Juwan-Hwang/moonboost

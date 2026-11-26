@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 (2026-11-26)
+
+Builds with MoonBit 1.0. Models, predictions and the public API are unchanged
+from 0.2.0; speed is the same within run-to-run noise on native, wasm, wasm-gc
+and js.
+
+- Requires MoonBit 1.0 or later. Use 0.2.0 with older toolchains.
+- SIMD gradients use `moonbitlang/core/simd` in place of the deprecated
+  `moonbitlang/core/v128`.
+- The WebAssembly GC trainer (webgc/) declares its exports with
+  `#export_name` as a `foreign_library` package; `webgc.wasm` exports the same
+  nine functions as before.
+
 ## 0.2.0 (2026-11-25)
 
 Training grows from four objectives to all 19 of XGBoost's, with categorical
